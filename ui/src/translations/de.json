@@ -269,7 +269,6 @@
     },
     "days": "Tage",
     "debug": "Debuggen",
-    "decline": "Ablehnen",
     "default": "Standard",
     "delete": "Löschen",
     "delete backfill": "Backfill löschen",
@@ -402,6 +401,7 @@
       "move_line": "Zeile verschieben",
       "reset_fontsize": "Schriftgröße zurücksetzen",
       "save_flow": "Flow speichern",
+      "toggle_ai_agent": "Toggle AI agent",
       "trigger_autocompletion": "Autovervollständigung auslösen",
       "uncomment": "Entkommentieren"
     },
@@ -1036,6 +1036,7 @@
     "read-more": "Mehr erfahren über",
     "readonly property": "Schreibgeschützte Eigenschaft",
     "refresh": "Aktualisieren",
+    "reject": "Reject",
     "relative": "Relativ",
     "relative end date": "Relatives Enddatum",
     "relative start date": "Relatives Startdatum",

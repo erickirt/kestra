@@ -269,7 +269,6 @@
     },
     "days": "दिन",
     "debug": "डिबग",
-    "decline": "अस्वीकार करें",
     "default": "डिफ़ॉल्ट",
     "delete": "हटाएं",
     "delete backfill": "Backfill हटाएं",
@@ -402,6 +401,7 @@
       "move_line": "लाइन को स्थानांतरित करें",
       "reset_fontsize": "फ़ॉन्ट आकार रीसेट करें",
       "save_flow": "फ्लो सहेजें",
+      "toggle_ai_agent": "Toggle AI agent",
       "trigger_autocompletion": "ट्रिगर ऑटोकम्प्लीशन",
       "uncomment": "अनकमेंट करें"
     },
@@ -1036,6 +1036,7 @@
     "read-more": "और अधिक पढ़ें",
     "readonly property": "केवल-पढ़ने की संपत्ति",
     "refresh": "ताज़ा करें",
+    "reject": "Reject",
     "relative": "सापेक्ष",
     "relative end date": "सापेक्ष समाप्ति तिथि",
     "relative start date": "सापेक्ष प्रारंभ तिथि",
