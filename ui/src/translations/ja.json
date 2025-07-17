@@ -269,7 +269,6 @@
     },
     "days": "日数",
     "debug": "デバッグ",
-    "decline": "辞退",
     "default": "デフォルト",
     "delete": "削除",
     "delete backfill": "backfillを削除",
@@ -402,6 +401,7 @@
       "move_line": "行を移動",
       "reset_fontsize": "フォントサイズをリセット",
       "save_flow": "フローを保存",
+      "toggle_ai_agent": "Toggle AI agent",
       "trigger_autocompletion": "オートコンプリートをトリガー",
       "uncomment": "コメント解除"
     },
@@ -1036,6 +1036,7 @@
     "read-more": "続きを読む",
     "readonly property": "読み取り専用プロパティ",
     "refresh": "更新",
+    "reject": "Reject",
     "relative": "相対",
     "relative end date": "相対終了日",
     "relative start date": "相対開始日",
