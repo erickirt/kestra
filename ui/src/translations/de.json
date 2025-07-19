@@ -602,6 +602,7 @@
         },
         "empty": "Sie haben noch keine Suche gespeichert.",
         "label": "Gespeicherte Suchen",
+        "name_already_used": "Search label already used.",
         "remove": "Entfernen",
         "tooltip": "Sie können keine leeren Suchkriterien speichern."
       },
