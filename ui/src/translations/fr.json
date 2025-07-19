@@ -602,6 +602,7 @@
         },
         "empty": "Vous n'avez pas encore enregistré de recherche.",
         "label": "Recherches enregistrées",
+        "name_already_used": "Search label already used.",
         "remove": "Supprimer",
         "tooltip": "Vous ne pouvez pas enregistrer des critères de recherche vides."
       },
