@@ -903,6 +903,7 @@
         "finally": "Выберите task",
         "inputs": "Выберите тип поля input",
         "pluginDefaults": "Выберите плагин",
+        "task": "Select a task",
         "tasks": "Выберите task",
         "triggers": "Выберите trigger"
       },
@@ -1011,6 +1012,14 @@
     "pause confirm": "Вы уверены, что хотите приостановить выполнение <code>{id}</code>?",
     "pause done": "Выполнение приостановлено",
     "pause title": "Приостановить выполнение <code>{id}</code>.<br/>Обратите внимание, что текущие RUNNING задачи все равно будут обрабатываться, и выполнение придется возобновить вручную.",
+    "playground": {
+      "empty": "Click the \"Run task\" button to test your workflow with a simulated execution.",
+      "history": "Last 10 runs",
+      "run_all_tasks": "Run All Tasks",
+      "run_task": "Run Task",
+      "title": "Playground",
+      "toggle": "Playground"
+    },
     "pluginDefaults": "Настройки плагина по умолчанию",
     "pluginPage": {
       "alt": "Иконка плагинов",
@@ -1072,6 +1081,7 @@
     "revision": "Редакция",
     "revisions": "Редакции",
     "row count": "Количество строк",
+    "run task in playground": "Run task in playground",
     "runners": "Запуски",
     "running duration": "Время выполнения",
     "save": "Сохранить",
@@ -1145,7 +1155,8 @@
             "language": "Язык",
             "log_display": "Отображение логов по умолчанию",
             "log_level": "Уровень логов по умолчанию",
-            "multi_panel_editor": "Многооконный редактор"
+            "multi_panel_editor": "Многооконный редактор",
+            "playground": "Playground"
           },
           "label": "Основная конфигурация"
         },
