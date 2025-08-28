@@ -217,6 +217,7 @@
       "edition": {
         "chart": "Редактировать этот график",
         "confirmation": "Изменения в панели <code>{title}</code> сохранены.",
+        "id readonly": "The property `id` cannot be changed — it's now set to its initial values. If you want to change it, you can create a new dashboard and remove the old one.",
         "label": "Редактировать Dashboard"
       },
       "empty": "Нет результатов для отображения.",

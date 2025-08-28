@@ -217,6 +217,7 @@
       "edition": {
         "chart": "このチャートを編集",
         "confirmation": "ダッシュボード<code>{title}</code>の変更が保存されました。",
+        "id readonly": "The property `id` cannot be changed — it's now set to its initial values. If you want to change it, you can create a new dashboard and remove the old one.",
         "label": "ダッシュボードを編集"
       },
       "empty": "表示する結果がありません。",
