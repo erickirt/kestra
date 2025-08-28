@@ -217,6 +217,7 @@
       "edition": {
         "chart": "इस चार्ट को संपादित करें",
         "confirmation": "डैशबोर्ड <code>{title}</code> में परिवर्तन सहेजे गए हैं।",
+        "id readonly": "The property `id` cannot be changed — it's now set to its initial values. If you want to change it, you can create a new dashboard and remove the old one.",
         "label": "डैशबोर्ड संपादित करें"
       },
       "empty": "कोई परिणाम नहीं दिखाया जा सकता।",
