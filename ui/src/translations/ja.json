@@ -806,11 +806,13 @@
         "label": "削除"
       },
       "dialog": {
-        "confirm": "確認",
-        "file_deletion": "ファイル削除の確認",
-        "file_deletion_description": "このファイルを削除してもよろしいですか？",
-        "folder_deletion": "フォルダー削除の確認",
-        "folder_deletion_description": "このフォルダーとそのすべての内容を削除してもよろしいですか？",
+        "deletion": {
+          "confirm": "Confirm",
+          "files": "Are you sure you want to delete <code>{count}</code> file(s)?",
+          "folders": "Are you sure you want to delete <code>{count}</code> folder(s) and all of its contents?",
+          "mixed": "Are you sure you want to delete <code>{folders}</code> folder(s) and <code>{files}</code> file(s)?",
+          "title": "Confirm deletion of content"
+        },
         "name": {
           "file": "拡張子付きの名前:",
           "folder": "フォルダー名:"

@@ -806,11 +806,13 @@
         "label": "Deletar"
       },
       "dialog": {
-        "confirm": "Confirmar",
-        "file_deletion": "Confirmar deleção de arquivo",
-        "file_deletion_description": "Tem certeza de que deseja deletar este arquivo?",
-        "folder_deletion": "Confirmar deleção de pasta",
-        "folder_deletion_description": "Tem certeza de que deseja deletar esta pasta e todo o seu conteúdo?",
+        "deletion": {
+          "confirm": "Confirm",
+          "files": "Are you sure you want to delete <code>{count}</code> file(s)?",
+          "folders": "Are you sure you want to delete <code>{count}</code> folder(s) and all of its contents?",
+          "mixed": "Are you sure you want to delete <code>{folders}</code> folder(s) and <code>{files}</code> file(s)?",
+          "title": "Confirm deletion of content"
+        },
         "name": {
           "file": "Nome com extensão:",
           "folder": "Nome da pasta:"

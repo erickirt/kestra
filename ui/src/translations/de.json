@@ -806,11 +806,13 @@
         "label": "Löschen"
       },
       "dialog": {
-        "confirm": "Bestätigen",
-        "file_deletion": "Datei-Löschung bestätigen",
-        "file_deletion_description": "Sind Sie sicher, dass Sie diese Datei löschen möchten?",
-        "folder_deletion": "Ordner-Löschung bestätigen",
-        "folder_deletion_description": "Sind Sie sicher, dass Sie diesen Ordner und alle seine Inhalte löschen möchten?",
+        "deletion": {
+          "confirm": "Confirm",
+          "files": "Are you sure you want to delete <code>{count}</code> file(s)?",
+          "folders": "Are you sure you want to delete <code>{count}</code> folder(s) and all of its contents?",
+          "mixed": "Are you sure you want to delete <code>{folders}</code> folder(s) and <code>{files}</code> file(s)?",
+          "title": "Confirm deletion of content"
+        },
         "name": {
           "file": "Name mit Erweiterung:",
           "folder": "Ordnername:"
