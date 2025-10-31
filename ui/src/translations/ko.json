@@ -170,6 +170,11 @@
       "back": "뒤로"
     },
     "concurrency": "동시성",
+    "concurrency limits": "Concurrency Limits",
+    "concurrency_limit": {
+      "dialog_title": "Concurrency Limits",
+      "warning": "Changing the running counter may corrupt concurrency so executions may exceed the allowed limit"
+    },
     "conditions": "조건",
     "configure basic auth": "기본 인증 구성",
     "confirm": "확인",

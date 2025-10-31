@@ -170,6 +170,11 @@
       "back": "वापस"
     },
     "concurrency": "समानांतरता",
+    "concurrency limits": "Concurrency Limits",
+    "concurrency_limit": {
+      "dialog_title": "Concurrency Limits",
+      "warning": "Changing the running counter may corrupt concurrency so executions may exceed the allowed limit"
+    },
     "conditions": "शर्तें",
     "configure basic auth": "बेसिक प्रमाणीकरण कॉन्फ़िगर करें",
     "confirm": "पुष्टि करें",

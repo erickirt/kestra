@@ -170,6 +170,11 @@
       "back": "戻る"
     },
     "concurrency": "並行性",
+    "concurrency limits": "Concurrency Limits",
+    "concurrency_limit": {
+      "dialog_title": "Concurrency Limits",
+      "warning": "Changing the running counter may corrupt concurrency so executions may exceed the allowed limit"
+    },
     "conditions": "条件",
     "configure basic auth": "基本認証を設定",
     "confirm": "確認",
