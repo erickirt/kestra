@@ -98,6 +98,7 @@
     "bulk change state": "Sei sicuro di voler cambiare lo stato di <code>{executionCount}</code> esecuzione/i?",
     "bulk delete": "Sei sicuro di voler eliminare <code>{executionCount}</code> esecuzione/i?",
     "bulk delete backfills": "Elimina {count} backfill",
+    "bulk delete triggers": "Are you sure you want to delete {count} triggers?",
     "bulk disabled status": {
       "false": "Abilita {count} triggers",
       "true": "Disabilita {count} triggers"
@@ -111,6 +112,7 @@
     "bulk resume": "Sei sicuro di voler riprendere <code>{executionCount}</code> esecuzione/i?",
     "bulk set labels": "Sei sicuro di voler impostare etichette a <code>{executionCount}</code> esecuzione/i?",
     "bulk success delete backfills": "{count} backfills eliminati",
+    "bulk success delete triggers": "{count} triggers have been deleted successfully",
     "bulk success disabled status": {
       "false": "{count} trigger(s) abilitati",
       "true": "{count} trigger(s) disabilitati"
@@ -293,6 +295,11 @@
     "delete logs": "Elimina logs",
     "delete ok": "è eliminato",
     "delete task confirm": "Vuoi eliminare il task <code>{taskId}</code>?",
+    "delete trigger": "Delete trigger",
+    "delete trigger confirmation": "Are you sure you want to delete trigger {id}? WARNING: deleting a trigger may lead to duplicate executions if the trigger is still active in a flow",
+    "delete trigger error": "Error deleting trigger {id}",
+    "delete trigger success": "Trigger {id} has been deleted successfully",
+    "delete triggers": "Delete triggers",
     "delete_all_logs": "Sei sicuro di voler eliminare tutti i logs?",
     "delete_log": "Sei sicuro di voler eliminare il log?",
     "deleted": "Eliminato con successo",
