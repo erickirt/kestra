@@ -8,7 +8,6 @@ import io.kestra.core.models.Plugin;
 import io.kestra.core.models.executions.AbstractMetricEntry;
 import io.kestra.core.models.property.Property;
 import io.kestra.core.models.property.PropertyContext;
-import io.kestra.core.storages.StateStore;
 import io.kestra.core.storages.Storage;
 import io.kestra.core.storages.kv.KVStore;
 import org.slf4j.Logger;
@@ -173,14 +172,6 @@ public abstract class RunContext implements PropertyContext {
      * @return The {@link KVStore}.
      */
     public abstract KVStore namespaceKv(String namespace);
-
-    /**
-     * @deprecated use #namespaceKv(String) instead
-     */
-    @Deprecated(since = "1.1.0", forRemoval = true)
-    public StateStore stateStore() {
-        return new StateStore(this, true);
-    }
 
     /**
      * Get access to local paths of the host machine.
