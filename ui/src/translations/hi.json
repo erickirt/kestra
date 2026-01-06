@@ -62,6 +62,7 @@
     "api": "API",
     "appBlocks": "ऐप ब्लॉक्स",
     "apps": "ऐप्स",
+    "assets": "Assets",
     "attempt": "प्रयास",
     "attempts": "प्रयास",
     "auditlogs": "Audit Logs",
@@ -337,6 +338,10 @@
         "title": "अपने इंस्टेंस के पार Infrastructure प्रबंधित करें"
       },
       "namespace": {
+        "assets": {
+          "message": "In Kestra Enterprise Edition, Assets keeps a live inventory of resources that your workflows interact with. These resources can be database tables, virtual machines, files, or any external system you work with.",
+          "title": "Centralize Asset Management"
+        },
         "audit-logs": {
           "message": "Kestra एंटरप्राइज एडिशन में, आप namespace-स्तर के ऑडिट logs को विस्तृत अंतर के साथ देख सकते हैं, जो आपको सभी संसाधनों में किसने क्या और कब बदला, इसका स्पष्ट इतिहास प्रदान करता है।",
           "title": "सभी परिवर्तनों को एक स्थान पर ट्रैक करें"
