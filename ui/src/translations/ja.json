@@ -62,6 +62,7 @@
     "api": "API",
     "appBlocks": "アプリブロック",
     "apps": "アプリケーション",
+    "assets": "Assets",
     "attempt": "試行",
     "attempts": "試行回数",
     "auditlogs": "Audit Logs",
@@ -337,6 +338,10 @@
         "title": "インスタンス全体のインフラストラクチャを管理する"
       },
       "namespace": {
+        "assets": {
+          "message": "In Kestra Enterprise Edition, Assets keeps a live inventory of resources that your workflows interact with. These resources can be database tables, virtual machines, files, or any external system you work with.",
+          "title": "Centralize Asset Management"
+        },
         "audit-logs": {
           "message": "Kestra Enterprise Editionでは、namespaceレベルの監査Logを詳細な差分とともに表示でき、すべてのリソースにわたって誰が何をいつ変更したかの履歴を明確に確認できます。",
           "title": "すべての変更を一箇所で追跡"
