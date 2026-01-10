@@ -669,6 +669,20 @@ public class FlowController {
         return flowService.validate(tenantService.resolveTenant(), flows);
     }
 
+    @ExecuteOn(TaskExecutors.IO)
+    @Post(uri = "validate", consumes = MediaType.MULTIPART_FORM_DATA)
+    @Operation(tags = {"Flows"}, summary = "Validate a list of flows")
+    public List<ValidateConstraintViolation> validateFlows(
+        @RequestBody(description = "A list of flow files") @Part("flows") Publisher<CompletedFileUpload> flowsPublisher
+    ) {
+        List<CompletedFileUpload> flowFiles = Flux.from(flowsPublisher)
+            .collectList()
+            .blockOptional()
+            .orElse(Collections.emptyList());
+
+        return flowService.validate(tenantService.resolveTenant(), flowFiles);
+    }
+
     // This endpoint is not used by the Kestra UI nor our CLI but is provided for the API users for convenience
     @ExecuteOn(TaskExecutors.IO)
     @Post(uri = "/validate/task", consumes = MediaType.APPLICATION_JSON)
