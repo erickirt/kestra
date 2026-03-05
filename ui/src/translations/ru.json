@@ -703,6 +703,10 @@
         "label": "Идентификатор flow"
       },
       "footer_apply": "Применить",
+      "group": {
+        "description": "Filter by group",
+        "label": "Group"
+      },
       "hierarchy": {
         "all": "По умолчанию",
         "child_description": "Показать только вложенные/запущенные executions",
@@ -935,6 +939,10 @@
         "label": "Состояние Trigger"
       },
       "update": "Обновить",
+      "username": {
+        "description": "Filter by username",
+        "label": "Username"
+      },
       "value": "Значение",
       "workerId": {
         "description": "Фильтр по worker ID",
