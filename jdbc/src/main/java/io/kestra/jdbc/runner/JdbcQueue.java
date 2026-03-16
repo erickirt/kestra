@@ -35,6 +35,7 @@ import java.time.Duration;
 import java.time.ZonedDateTime;
 import java.util.*;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
@@ -76,8 +77,7 @@ public abstract class JdbcQueue<T> implements QueueInterface<T> {
 
     private final boolean immediateRepoll;
 
-    private final AtomicBoolean running = new AtomicBoolean(true);
-    private final AtomicBoolean stopped = new AtomicBoolean(false);
+    private final AtomicBoolean closed = new AtomicBoolean(false);
     private final AtomicBoolean paused = new AtomicBoolean(false);
 
     private final Counter bigMessageCounter;
@@ -461,11 +461,13 @@ public abstract class JdbcQueue<T> implements QueueInterface<T> {
 
     @SuppressWarnings("BusyWait")
     protected Runnable poll(Supplier<Integer> runnable) {
+        AtomicBoolean running = new AtomicBoolean(true);
+        AtomicBoolean stopped = new AtomicBoolean(false);
         poolExecutor.execute(() -> {
             List<Configuration.Step> steps = configuration.computeSteps();
             Duration sleep = configuration.minPollInterval;
             ZonedDateTime lastPoll = ZonedDateTime.now();
-            while (this.running.get()) {
+            while (running.get() && !closed.get()) {
                 if (!this.paused.get()) {
                     try {
                         Integer count = runnable.get();
@@ -498,12 +500,10 @@ public abstract class JdbcQueue<T> implements QueueInterface<T> {
                     }
                 }
 
-                if (this.running.get()) {
-                    try {
-                        Thread.sleep(sleep);
-                    } catch (InterruptedException e) {
-                        throw new RuntimeException(e);
-                    }
+                try {
+                    Thread.sleep(sleep);
+                } catch (InterruptedException e) {
+                    running.set(false);
                 }
             }
 
@@ -551,18 +551,21 @@ public abstract class JdbcQueue<T> implements QueueInterface<T> {
 
     @Override
     public void close() throws IOException {
-        if (this.running.get()) {
-            this.running.set(false);
-        }
-        try {
-            Awaitility.await()
-                .atMost(Duration.ofSeconds(30))
-                .until(stopped::get);
-        } catch (Exception e) {
-            log.warn("Error while closing queue", e);
-        }
+        this.closed.set(true);
         this.poolExecutor.shutdown();
         this.asyncPoolExecutor.shutdown();
+        try {
+            if (!this.poolExecutor.awaitTermination(30, TimeUnit.SECONDS)){
+                log.error("Couldn't wait for queue executor to close properly, forcing shutdown");
+                this.poolExecutor.shutdownNow();
+            }
+            if (!this.asyncPoolExecutor.awaitTermination(30, TimeUnit.SECONDS)) {
+                log.error("Couldn't wait for async queue executor to close properly, forcing shutdown");
+                this.asyncPoolExecutor.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            log.error("Couldn't wait for queue executors to close properly", e);
+        }
     }
 
     @ConfigurationProperties("kestra.jdbc.queues")
