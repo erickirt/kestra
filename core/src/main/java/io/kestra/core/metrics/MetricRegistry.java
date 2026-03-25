@@ -5,8 +5,11 @@ import io.kestra.core.models.executions.Execution;
 import io.kestra.core.models.executions.ExecutionKilled;
 import io.kestra.core.models.tasks.Task;
 import io.kestra.core.models.triggers.AbstractTrigger;
-import io.kestra.core.models.triggers.TriggerContext;
-import io.kestra.core.runners.*;
+import io.kestra.core.models.triggers.TriggerId;
+import io.kestra.core.runners.SubflowExecutionResult;
+import io.kestra.core.runners.WorkerTask;
+import io.kestra.core.runners.WorkerTaskResult;
+import io.kestra.core.runners.WorkerTrigger;
 import io.micrometer.core.instrument.*;
 import io.micrometer.core.instrument.binder.MeterBinder;
 import io.micrometer.core.instrument.search.Search;
@@ -20,17 +23,17 @@ import java.util.Collection;
 import java.util.List;
 import java.util.function.Supplier;
 
+import java.util.function.Supplier;
+
 @Singleton
 @Slf4j
 public class MetricRegistry {
-    public static final String METRIC_WORKER_JOB_PENDING_COUNT = "worker.job.pending";
-    public static final String METRIC_WORKER_JOB_PENDING_COUNT_DESCRIPTION = "The number of jobs (tasks or triggers) pending to be run by the Worker";
-    public static final String METRIC_WORKER_JOB_RUNNING_COUNT = "worker.job.running";
-    public static final String METRIC_WORKER_JOB_RUNNING_COUNT_DESCRIPTION = "The number of jobs (tasks or triggers) currently running inside the Worker";
     public static final String METRIC_WORKER_JOB_THREAD_COUNT = "worker.job.thread";
     public static final String METRIC_WORKER_JOB_THREAD_COUNT_DESCRIPTION = "The number of worker threads";
     public static final String METRIC_WORKER_RUNNING_COUNT = "worker.running.count";
     public static final String METRIC_WORKER_RUNNING_COUNT_DESCRIPTION = "The number of tasks currently running inside the Worker";
+    public static final String METRIC_WORKER_PENDING_COUNT = "worker.pending.count";
+    public static final String METRIC_WORKER_PENDING_COUNT_DESCRIPTION = "The number of tasks currently pending for a runnable thread inside the Worker";
     public static final String METRIC_WORKER_QUEUED_DURATION = "worker.queued.duration";
     public static final String METRIC_WORKER_QUEUED_DURATION_DESCRIPTION = "Task queued duration inside the Worker";
     public static final String METRIC_WORKER_STARTED_COUNT = "worker.started.count";
@@ -97,12 +100,6 @@ public class MetricRegistry {
     public static final String METRIC_INDEXER_REQUEST_COUNT_DESCRIPTION = "Total number of batches of records received by the Indexer";
     public static final String METRIC_INDEXER_REQUEST_DURATION = "indexer.request.duration";
     public static final String METRIC_INDEXER_REQUEST_DURATION_DESCRIPTION = "Batch of records duration inside the Indexer";
-    public static final String METRIC_INDEXER_REQUEST_RETRY_COUNT = "indexer.request.retry.count";
-    public static final String METRIC_INDEXER_REQUEST_RETRY_COUNT_DESCRIPTION = "Total number of batches of records retried by the Indexer";
-    public static final String METRIC_INDEXER_SERVER_DURATION = "indexer.server.duration";
-    public static final String METRIC_INDEXER_SERVER_DURATION_DESCRIPTION = "Batch of records indexation duration";
-    public static final String METRIC_INDEXER_MESSAGE_FAILED_COUNT = "indexer.message.failed.count";
-    public static final String METRIC_INDEXER_MESSAGE_FAILED_COUNT_DESCRIPTION = "Total number of records which failed to be indexed by the Indexer";
     public static final String METRIC_INDEXER_MESSAGE_IN_COUNT = "indexer.message.in.count";
     public static final String METRIC_INDEXER_MESSAGE_IN_COUNT_DESCRIPTION = "Total number of records received by the Indexer";
     public static final String METRIC_INDEXER_MESSAGE_OUT_COUNT = "indexer.message.out.count";
@@ -124,21 +121,28 @@ public class MetricRegistry {
     public static final String METRIC_SCHEDULER_EXECUTION_MISSING_DURATION_DESCRIPTION = "Missing execution duration inside the Scheduler. A missing execution is an execution that was triggered by the Scheduler but not yet started by the Executor";
     public static final String METRIC_SCHEDULER_EVALUATION_LOOP_DURATION = "scheduler.evaluation.loop.duration";
     public static final String METRIC_SCHEDULER_EVALUATION_LOOP_DURATION_DESCRIPTION = "Trigger evaluation loop duration inside the Scheduler";
-
-    public static final String METRIC_STREAMS_STATE_COUNT = "stream.state.count";
-    public static final String METRIC_STREAMS_STATE_COUNT_DESCRIPTION = "Number of Kafka Stream applications by state";
+    public static final String METRIC_SCHEDULER_EVENTLOOP_THREAD_MAX = "scheduler.eventloop.thread.max";
+    public static final String METRIC_SCHEDULER_EVENTLOOP_THREAD_MAX_DESCRIPTION = "The maximum number of event-loop threads.";
+    public static final String METRIC_SCHEDULER_EVENTLOOP_TICK_DURATION = "scheduler.eventloop.tick.duration";
+    public static final String METRIC_SCHEDULER_EVENTLOOP_TICK_DURATION_DESCRIPTION = "The duration of a single event-loop tick.";
+    public static final String METRIC_SCHEDULER_EVENTLOOP_EVENT_RECEIVED_COUNT = "scheduler.eventloop.events.received.count";
+    public static final String METRIC_SCHEDULER_EVENTLOOP_EVENT_RECEIVED_COUNT_DESCRIPTION = "The total number of events received by the event-loop.";
+    public static final String METRIC_SCHEDULER_EVENTLOOP_EVENT_PROCESS_DURATION = "scheduler.eventloop.event.process.duration";
+    public static final String METRIC_SCHEDULER_EVENTLOOP_EVENT_PROCESS_DURATION_DESCRIPTION = "The duration spent processing individual events within the event-loop.";
+    public static final String METRIC_SCHEDULER_ASSIGNED_VNODES_COUNT = "scheduler.assigned.vnodes.count";
+    public static final String METRIC_SCHEDULER_ASSIGNED_VNODES_COUNT_DESCRIPTION = "The number of virtual nodes assigned to the scheduler";
 
     public static final String METRIC_JDBC_QUERY_DURATION = "jdbc.query.duration";
     public static final String METRIC_JDBC_QUERY_DURATION_DESCRIPTION = "Duration of database queries";
 
     public static final String METRIC_QUEUE_BIG_MESSAGE_COUNT = "queue.big_message.count";
     public static final String METRIC_QUEUE_BIG_MESSAGE_COUNT_DESCRIPTION = "Total number of big messages";
-    public static final String METRIC_QUEUE_PRODUCE_COUNT = "queue.produce.count";
-    public static final String METRIC_QUEUE_PRODUCE_COUNT_DESCRIPTION = "Total number of produced messages";
-    public static final String METRIC_QUEUE_RECEIVE_DURATION = "queue.receive.duration";
-    public static final String METRIC_QUEUE_RECEIVE_DURATION_DESCRIPTION = "Queue duration to receive and consume a batch of messages";
-    public static final String METRIC_QUEUE_POLL_SIZE = "queue.poll.size";
-    public static final String METRIC_QUEUE_POLL_SIZE_DESCRIPTION = "Size of a poll to the queue (message batch size)";
+    public static final String METRIC_QUEUE_EMIT_COUNT = "queue.emit.count";
+    public static final String METRIC_QUEUE_EMIT_COUNT_DESCRIPTION = "Total number of emitted messages";
+    public static final String METRIC_QUEUE_CONSUME_DURATION = "queue.consume.duration";
+    public static final String METRIC_QUEUE_CONSUME_DURATION_DESCRIPTION = "Queue message consumer duration for each message";
+    public static final String METRIC_QUEUE_CONSUME_BATCH_DURATION = "queue.consume.batch.duration";
+    public static final String METRIC_QUEUE_CONSUME_BATCH_DURATION_DESCRIPTION = "Queue message consumer duration for a batch of messages";
 
     public static final String TAG_TASK_TYPE = "task_type";
     public static final String TAG_TRIGGER_TYPE = "trigger_type";
@@ -151,9 +155,6 @@ public class MetricRegistry {
     public static final String TAG_TENANT_ID = "tenant_id";
     public static final String TAG_CLASS_NAME = "class_name";
     public static final String TAG_EXECUTION_KILLED_TYPE = "execution_killed_type";
-    public static final String TAG_QUEUE_CONSUMER = "consumer";
-    public static final String TAG_QUEUE_CONSUMER_GROUP = "consumer_group";
-    public static final String TAG_QUEUE_TYPE = "queue_type";
     public static final String TAG_LABEL_PREFIX = "label";
     /**
      * Sentinel value representing logical absence of label.
@@ -188,15 +189,6 @@ public class MetricRegistry {
             .register(this.meterRegistry);
     }
 
-
-
-    public <T extends Number> Gauge gauge(String name, String description, Supplier<T> supplier, String... tags) {
-        return Gauge.builder(metricName(name), supplier)
-            .description(description)
-            .tags(tags)
-            .register(this.meterRegistry);
-    }
-
     /**
      * Register a gauge that reports the value of the {@link Number}.
      *
@@ -209,8 +201,26 @@ public class MetricRegistry {
      * statement.
      */
     public <T extends Number> T gauge(String name, String description, T number, String... tags) {
-        gauge(name, description, (Supplier<T>) () -> number, tags);
+        gauge(name, description, (Supplier<T>)() -> number, tags);
         return number;
+    }
+
+    /**
+     * Register a gauge that reports the value of the {@link Number}.
+     *
+     * @param name   Name of the gauge being registered.
+     * @param description The metric description
+     * @param supplier A function that yields a double value for the gauge.
+     * @param tags   Sequence of dimensions for breaking down the name.
+     * @param <T>    The type of the number from which the gauge value is extracted.
+     * @return The number that was passed in so the registration can be done as part of an assignment
+     * statement.
+     */
+    public <T extends Number> Gauge gauge(String name, String description, Supplier<T> supplier, String... tags) {
+        return Gauge.builder(metricName(name),supplier)
+            .description(description)
+            .tags(tags)
+            .register(this.meterRegistry);
     }
 
     /**
@@ -347,12 +357,12 @@ public class MetricRegistry {
                 ),
                 workerGroupTags(workerGroup, tags)
             ),
-            TAG_NAMESPACE_ID, workerTrigger.getTriggerContext().getNamespace(),
-            TAG_FLOW_ID, workerTrigger.getTriggerContext().getFlowId()
+            TAG_NAMESPACE_ID, workerTrigger.triggerId().getNamespace(),
+            TAG_FLOW_ID, workerTrigger.triggerId().getFlowId()
         );
 
 
-        return workerTrigger.getTriggerContext().getTenantId() == null ? baseTags : ArrayUtils.addAll(baseTags, TAG_TENANT_ID, workerTrigger.getTriggerContext().getTenantId());
+        return workerTrigger.triggerId().getTenantId() == null ? baseTags : ArrayUtils.addAll(baseTags, TAG_TENANT_ID, workerTrigger.triggerId().getTenantId());
     }
 
     public String[] workerGroupTags(String workerGroup, String... tags) {
@@ -436,17 +446,17 @@ public class MetricRegistry {
     }
 
     /**
-     * Return tags for current {@link TriggerContext}
+     * Return tags for current {@link TriggerId}
      *
-     * @param triggerContext the current TriggerContext
+     * @param triggerId the trigger
      * @return tags to apply to metrics
      */
-    public String[] tags(TriggerContext triggerContext) {
+    public String[] tags(TriggerId triggerId) {
         var baseTags = new String[]{
-            TAG_FLOW_ID, triggerContext.getFlowId(),
-            TAG_NAMESPACE_ID, triggerContext.getNamespace()
+            TAG_FLOW_ID, triggerId.getFlowId(),
+            TAG_NAMESPACE_ID, triggerId.getNamespace()
         };
-        return triggerContext.getTenantId() == null ? baseTags : ArrayUtils.addAll(baseTags, TAG_TENANT_ID, triggerContext.getTenantId());
+        return triggerId.getTenantId() == null ? baseTags : ArrayUtils.addAll(baseTags, TAG_TENANT_ID, triggerId.getTenantId());
     }
 
     /**

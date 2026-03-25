@@ -1,9 +1,9 @@
 package io.kestra.core.runners;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonInclude;
-import io.kestra.core.models.conditions.ConditionContext;
 import io.kestra.core.models.triggers.AbstractTrigger;
-import io.kestra.core.models.triggers.Trigger;
+import io.kestra.core.models.triggers.TriggerId;
 import lombok.Builder;
 import lombok.Data;
 
@@ -18,20 +18,25 @@ public class WorkerTrigger extends WorkerJob {
     @JsonInclude
     private final String type = TYPE;
 
+    /** The trigger plugin to execute. Also provides triggerId via {@code trigger.getId()}. */
     @NotNull
     private AbstractTrigger trigger;
 
+    /** All data the worker needs to reconstruct TriggerContext, RunContext, and ConditionContext. */
     @NotNull
-    private Trigger triggerContext;
-
-    @NotNull
-    private ConditionContext conditionContext;
+    private WorkerTriggerData data;
 
     /**
      * {@inheritDoc}
      */
     @Override
     public String uid() {
-        return triggerContext.uid();
+        return triggerId().uid();
+    }
+
+    /** Builds a {@link TriggerId} from the wire data fields. */
+    @JsonIgnore
+    public TriggerId triggerId() {
+        return TriggerId.of(data.tenantId(), data.namespace(), data.flowId(), trigger.getId());
     }
 }

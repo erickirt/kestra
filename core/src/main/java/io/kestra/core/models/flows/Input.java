@@ -1,12 +1,10 @@
 package io.kestra.core.models.flows;
 
-import com.fasterxml.jackson.annotation.JsonSetter;
 import com.fasterxml.jackson.annotation.JsonSubTypes;
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
 import io.kestra.core.models.flows.input.*;
 import io.kestra.core.models.property.Property;
 import io.kestra.core.validations.InputValidation;
-import io.micronaut.core.annotation.Introspected;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.ConstraintViolationException;
 import jakarta.validation.Valid;
@@ -18,15 +16,12 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.experimental.SuperBuilder;
 
-@SuppressWarnings("deprecation")
 @SuperBuilder
 @Getter
 @NoArgsConstructor
-@Introspected
 @JsonTypeInfo(use = JsonTypeInfo.Id.NAME, property = "type", visible = true, include = JsonTypeInfo.As.EXISTING_PROPERTY)
 @JsonSubTypes({
     @JsonSubTypes.Type(value = ArrayInput.class, name = "ARRAY"),
-    @JsonSubTypes.Type(value = BooleanInput.class, name = "BOOLEAN"),
     @JsonSubTypes.Type(value = BoolInput.class, name = "BOOL"),
     @JsonSubTypes.Type(value = DateInput.class, name = "DATE"),
     @JsonSubTypes.Type(value = DateTimeInput.class, name = "DATETIME"),
@@ -37,7 +32,6 @@ import lombok.experimental.SuperBuilder;
     @JsonSubTypes.Type(value = JsonInput.class, name = "JSON"),
     @JsonSubTypes.Type(value = SecretInput.class, name = "SECRET"),
     @JsonSubTypes.Type(value = StringInput.class, name = "STRING"),
-    @JsonSubTypes.Type(value = EnumInput.class, name = "ENUM"),
     @JsonSubTypes.Type(value = SelectInput.class, name = "SELECT"),
     @JsonSubTypes.Type(value = TimeInput.class, name = "TIME"),
     @JsonSubTypes.Type(value = URIInput.class, name = "URI"),
@@ -54,9 +48,6 @@ public abstract class Input<T> implements Data {
     @NotBlank
     @Pattern(regexp="^[a-zA-Z0-9][.a-zA-Z0-9_-]*")
     String id;
-
-    @Deprecated
-    String name;
 
     @Schema(
         title = "The type of the input."
@@ -82,26 +73,17 @@ public abstract class Input<T> implements Data {
         title = "The default value to use if no value is specified."
     )
     Property<T> defaults;
-    
+
     @Schema(
         title = "The suggested value for the input.",
         description = "Optional UI hint for pre-filling the input. Cannot be used together with a default value."
     )
     Property<T> prefill;
-    
+
     @Schema(
         title = "The display name of the input."
     )
     String displayName;
 
     public abstract void validate(T input) throws ConstraintViolationException;
-
-    @JsonSetter
-    public void setName(String name) {
-        if (this.id == null) {
-            this.id = name;
-        }
-
-        this.name = name;
-    }
 }

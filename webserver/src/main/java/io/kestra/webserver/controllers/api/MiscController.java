@@ -10,8 +10,6 @@ import io.kestra.core.reporter.Reportable;
 import io.kestra.core.reporter.reports.FeatureUsageReport;
 import io.kestra.core.runners.pebble.PebbleExpressionService;
 import io.kestra.core.repositories.DashboardRepositoryInterface;
-import io.kestra.core.repositories.ExecutionRepositoryInterface;
-import io.kestra.core.repositories.TemplateRepositoryInterface;
 import io.kestra.core.services.InstanceService;
 import io.kestra.core.utils.EditionProvider;
 import io.kestra.core.utils.VersionProvider;
@@ -54,9 +52,6 @@ public class MiscController {
     DashboardRepositoryInterface dashboardRepository;
 
     @Inject
-    ExecutionRepositoryInterface executionRepository;
-
-    @Inject
     InstanceService instanceService;
 
     @Inject
@@ -66,13 +61,10 @@ public class MiscController {
     Optional<BasicAuthService> basicAuthService = Optional.empty();
 
     @Inject
-    Optional<TemplateRepositoryInterface> templateRepository;
-
-    @Inject
     KestraConfig kestraConfig;
 
     @io.micronaut.context.annotation.Value("${kestra.ui.charts.default-duration:PT24H}")
-private String chartDefaultDuration;
+    private String chartDefaultDuration;
 
     @io.micronaut.context.annotation.Value("${kestra.anonymous-usage-report.enabled}")
     protected Boolean isAnonymousUsageEnabled;
@@ -129,7 +121,6 @@ private String chartDefaultDuration;
             .isCustomDashboardsEnabled(dashboardRepository.isEnabled())
             .isAnonymousUsageEnabled(this.isAnonymousUsageEnabled)
             .isUiAnonymousUsageEnabled(this.isUiAnonymousUsageEnabled)
-            .isTemplateEnabled(templateRepository.isPresent())
             .preview(Preview.builder()
                 .initial(this.initialPreviewRows)
                 .max(this.maxPreviewRows)
@@ -229,9 +220,6 @@ private String chartDefaultDuration;
 
         @JsonInclude
         Boolean isUiAnonymousUsageEnabled;
-
-        @JsonInclude
-        Boolean isTemplateEnabled;
 
         Environment environment;
 

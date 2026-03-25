@@ -22,7 +22,6 @@ import io.kestra.core.plugins.PluginRegistry;
 import io.kestra.core.plugins.RegisteredPlugin;
 import io.kestra.core.runners.RunContext;
 import io.kestra.plugin.core.dashboard.data.Executions;
-import io.kestra.plugin.core.debug.Echo;
 import io.kestra.plugin.core.debug.Return;
 import io.kestra.plugin.core.flow.Dag;
 import io.kestra.plugin.core.log.Log;
@@ -119,10 +118,6 @@ class JsonSchemaGeneratorTest {
             var requiredWithDefault = definitions.get("io.kestra.core.docs.JsonSchemaGeneratorTest-RequiredWithDefault");
             assertThat(requiredWithDefault, is(notNullValue()));
             assertThat((List<String>) requiredWithDefault.get("required"), not(containsInAnyOrder("requiredWithDefault", "anotherRequiredWithDefault")));
-
-            var properties = (Map<String, Map<String, Object>>) flow.get("properties");
-            var listeners = properties.get("listeners");
-            assertThat(listeners.get("$deprecated"), is(true));
         });
     }
 
@@ -224,20 +219,6 @@ class JsonSchemaGeneratorTest {
             var secondMetric = (Map<String, Object>) metrics.get(1);
             assertThat(secondMetric.get("name"), is("duration"));
             assertThat(secondMetric.get("type"), is("timer"));
-        });
-    }
-
-    @SuppressWarnings({"unchecked", "deprecation"})
-    @Test
-    void echoTask() throws URISyntaxException {
-        Helpers.runApplicationContext((applicationContext) -> {
-            JsonSchemaGenerator jsonSchemaGenerator = applicationContext.getBean(JsonSchemaGenerator.class);
-
-            Map<String, Object> returnSchema = jsonSchemaGenerator.schemas(Echo.class);
-            var definitions = (Map<String, Map<String, Object>>) returnSchema.get("definitions");
-            var returnTask = definitions.get(Echo.class.getName());
-            var deprecated = (String) returnTask.get("$deprecated");
-            assertThat(deprecated, is("true"));
         });
     }
 
@@ -359,7 +340,7 @@ class JsonSchemaGeneratorTest {
     void pluginSchemaShouldNotResolveTaskAndTriggerSubtypes() {
         Map<String, Object> generate = jsonSchemaGenerator.properties(null, TaskWithSubTaskAndSubTrigger.class);
         var definitions = (Map<String, Map<String, Object>>) generate.get("$defs");
-        assertThat(definitions.size(), is(30));
+        assertThat(definitions.size(), is(25));
     }
 
     @SuppressWarnings("unchecked")

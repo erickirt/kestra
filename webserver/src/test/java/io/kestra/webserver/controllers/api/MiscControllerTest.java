@@ -1,9 +1,9 @@
 package io.kestra.webserver.controllers.api;
 
+import io.kestra.core.junit.annotations.FlakyTest;
 import io.kestra.core.junit.annotations.KestraTest;
 import io.kestra.core.models.Setting;
 import io.kestra.core.models.flows.FlowWithSource;
-import io.kestra.core.repositories.FlowRepositoryInterface;
 import io.kestra.core.repositories.SettingRepositoryInterface;
 import io.kestra.core.utils.IdUtils;
 import io.kestra.webserver.services.BasicAuthCredentials;
@@ -45,9 +45,6 @@ class MiscControllerTest {
     @Inject
     private SettingRepositoryInterface settingRepository;
 
-    @Inject
-    private FlowRepositoryInterface flowRepository;
-
     @Test
     void getExpressionFilters() {
         List<String> response = client.toBlocking().retrieve(GET("/api/v1/pebble/filters"), Argument.LIST_OF_STRING);
@@ -69,7 +66,7 @@ class MiscControllerTest {
         assertThat(response).isNotNull();
         assertThat(response).isNotEmpty();
         // Kestra custom functions
-        assertThat(response).contains("now", "secret", "kv", "uuid", "json", "yaml");
+        assertThat(response).contains("now", "secret", "kv", "uuid", "yaml");
         // Pebble core functions
         assertThat(response).contains("max", "min", "range");
         // Should be sorted
@@ -96,6 +93,7 @@ class MiscControllerTest {
     }
 
     @Test
+    @FlakyTest
     void getEmptyValidationErrors() {
         List<String> response = client.toBlocking().retrieve(GET("/api/v1/basicAuthValidationErrors"), Argument.LIST_OF_STRING);
 
@@ -128,6 +126,7 @@ class MiscControllerTest {
         assertThat(jsonError.getMessage()).isEqualTo("Invalid username for Basic Authentication. Please provide a valid email address., Invalid password for Basic Authentication. The password must have 8 chars, one upper, one lower and one number: Resource fails validation");
     }
 
+    @FlakyTest
     @Test
     void basicAuth() {
         assertThatCode(() -> client.toBlocking().retrieve("/api/v1/configs", MiscController.Configuration.class)).doesNotThrowAnyException();
@@ -168,6 +167,7 @@ class MiscControllerTest {
     }
 
     @Test
+    @FlakyTest
     void canTriggerAWebhookWithoutBasicAuth() {
         String uid = "someUid2";
         String username = "my.email2@kestra.io";

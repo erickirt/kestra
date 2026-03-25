@@ -4,7 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.annotations.VisibleForTesting;
 import io.kestra.core.debug.Breakpoint;
 import io.kestra.core.events.CrudEvent;
-import io.kestra.core.events.CrudEventType;
+import io.kestra.core.executor.command.*;
 import io.kestra.core.exceptions.IllegalVariableEvaluationException;
 import io.kestra.core.exceptions.InternalException;
 import io.kestra.core.models.Label;
@@ -22,8 +22,6 @@ import io.kestra.core.models.topologies.FlowTopologyGraph;
 import io.kestra.core.models.triggers.AbstractTrigger;
 import io.kestra.core.models.validations.ManualConstraintViolation;
 import io.kestra.core.queues.QueueException;
-import io.kestra.core.queues.QueueFactoryInterface;
-import io.kestra.core.queues.QueueInterface;
 import io.kestra.core.repositories.ExecutionRepositoryInterface;
 import io.kestra.core.repositories.FlowRepositoryInterface;
 import io.kestra.core.runners.*;
@@ -37,11 +35,13 @@ import io.kestra.core.utils.Await;
 import io.kestra.core.utils.IdUtils;
 import io.kestra.core.utils.ListUtils;
 import io.kestra.core.utils.Logs;
-import io.kestra.plugin.core.flow.Pause;
 import io.kestra.plugin.core.trigger.AbstractWebhookTrigger;
 import io.kestra.plugin.core.trigger.WebhookContext;
 import io.kestra.plugin.core.trigger.WebhookResponse;
+import io.kestra.core.queues.BroadcastQueueInterface;
+import io.kestra.core.queues.DispatchQueueInterface;
 import io.kestra.webserver.converters.QueryFilterFormat;
+import io.kestra.webserver.models.api.ApiAsyncEvent;
 import io.kestra.webserver.responses.BulkErrorResponse;
 import io.kestra.webserver.responses.BulkResponse;
 import io.kestra.webserver.responses.PagedResults;
@@ -56,7 +56,6 @@ import io.kestra.webserver.utils.filepreview.FileRender;
 import io.kestra.webserver.utils.filepreview.FileRenderBuilder;
 import io.micronaut.context.annotation.Value;
 import io.micronaut.context.event.ApplicationEventPublisher;
-import io.micronaut.core.annotation.Introspected;
 import io.micronaut.core.annotation.Nullable;
 import io.micronaut.core.async.annotation.SingleResult;
 import io.micronaut.core.convert.format.Format;
@@ -70,7 +69,6 @@ import io.micronaut.http.server.types.files.StreamedFile;
 import io.micronaut.http.sse.Event;
 import io.micronaut.scheduling.TaskExecutors;
 import io.micronaut.scheduling.annotation.ExecuteOn;
-import io.micronaut.validation.Validated;
 import io.opentelemetry.api.OpenTelemetry;
 import io.opentelemetry.context.Context;
 import io.opentelemetry.context.propagation.ContextPropagators;
@@ -85,7 +83,6 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.parameters.RequestBody;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import jakarta.inject.Inject;
-import jakarta.inject.Named;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
@@ -124,8 +121,9 @@ import static io.kestra.core.models.Label.SYSTEM_PREFIX;
 import static io.kestra.core.utils.Rethrow.throwConsumer;
 import static io.kestra.core.utils.Rethrow.throwFunction;
 
+// FIXME for all update on the execution (resume, pause, force run, ...) we validate the state and if validation fail we throws
+//  sometimes an IllegalStateException sometimes an IllegalArgumentException: this would be great to always throw the same exception.
 @Slf4j
-@Validated
 @Controller("/api/v1/{tenant}/executions")
 public class ExecutionController {
     @Nullable
@@ -160,9 +158,6 @@ public class ExecutionController {
     private ConditionService conditionService;
 
     @Inject
-    private ConcurrencyLimitService concurrencyLimitService;
-
-    @Inject
     private ExecutionStreamingService streamingService;
 
     @Inject
@@ -172,12 +167,13 @@ public class ExecutionController {
     private ExecutionDependenciesStreamingService executionDependenciesStreamingService;
 
     @Inject
-    @Named(QueueFactoryInterface.EXECUTION_NAMED)
-    protected QueueInterface<Execution> executionQueue;
+    protected DispatchQueueInterface<Execution> executionQueue;
 
     @Inject
-    @Named(QueueFactoryInterface.KILL_NAMED)
-    protected QueueInterface<ExecutionKilled> killQueue;
+    protected BroadcastQueueInterface<ExecutionKilled> killQueue;
+
+    @Inject
+    protected DispatchQueueInterface<ExecutionCommand> executionCommandQueue;
 
     @Inject
     private ApplicationEventPublisher<CrudEvent<Execution>> eventPublisher;
@@ -618,6 +614,7 @@ public class ExecutionController {
                 .flowRevision(flow.getRevision())
                 .labels(LabelService.labelsExcludingSystem(flow.getLabels()))
                 .state(new State().withState(State.Type.FAILED))
+                .trigger(ExecutionTrigger.of(webhook, Map.of()))
                 .build();
 
             Logger logger = webhookContext.webhookService().runContext(flow, failedExecution).logger();
@@ -737,7 +734,7 @@ public class ExecutionController {
                         .ifPresent(propagator -> propagator.inject(Context.current(), executionWithInputs, ExecutionTextMapSetter.INSTANCE));
 
                     executionQueue.emit(executionWithInputs);
-                    eventPublisher.publishEvent(new CrudEvent<>(executionWithInputs, CrudEventType.CREATE));
+                    eventPublisher.publishEvent(CrudEvent.create(executionWithInputs));
 
                     if (!wait || executionWithInputs.getState().isFailed()) {
                         return Mono.just(ExecutionResponse.fromExecution(
@@ -969,7 +966,7 @@ public class ExecutionController {
     @ExecuteOn(TaskExecutors.IO)
     @Post(uri = "/{executionId}/restart")
     @Operation(tags = {"Executions"}, summary = "Restart a new execution from an old one")
-    public Execution restartExecution(
+    public ApiAsyncEvent restartExecution(
         @Parameter(description = "The execution id") @PathVariable String executionId,
         @Parameter(description = "The flow revision to use for new execution") @Nullable @QueryValue Integer revision
     ) throws Exception {
@@ -979,11 +976,15 @@ public class ExecutionController {
         }
         this.controlRevision(execution.get(), revision);
 
-        Execution restart = executionService.restart(execution.get(), revision);
-        executionQueue.emit(restart);
-        eventPublisher.publishEvent(new CrudEvent<>(restart, execution.get(), CrudEventType.UPDATE));
+        if (!(execution.get().getState().isFailed())) {
+            throw new IllegalStateException("Execution must be failed to be restarted, current state is '" +
+                execution.get().getState().getCurrent() + "' !"
+            );
+        }
 
-        return restart;
+        var executionRestartCommand = Restart.from(execution.get(), revision);
+        executionCommandQueue.emit(executionRestartCommand);
+        return ApiAsyncEvent.from(executionRestartCommand.eventId());
     }
 
     @ExecuteOn(TaskExecutors.IO)
@@ -1029,9 +1030,8 @@ public class ExecutionController {
             );
         }
         for (Execution execution : executions) {
-            Execution restart = executionService.restart(execution, null);
-            executionQueue.emit(restart);
-            eventPublisher.publishEvent(new CrudEvent<>(restart, execution, CrudEventType.UPDATE));
+            var executionRestartCommand = Restart.from(execution, null);
+            executionCommandQueue.emit(executionRestartCommand);
         }
 
         return HttpResponse.ok(BulkResponse.builder().count(executions.size()).build());
@@ -1083,7 +1083,7 @@ public class ExecutionController {
     @ExecuteOn(TaskExecutors.IO)
     @Post(uri = "/{executionId}/replay")
     @Operation(tags = {"Executions"}, summary = "Create a new execution from an old one and start it from a specified task run id")
-    public Execution replayExecution(
+    public ApiAsyncEvent replayExecution(
         @Parameter(description = "the original execution id to clone") @PathVariable String executionId,
         @Parameter(description = "The taskrun id") @Nullable @QueryValue String taskRunId,
         @Parameter(description = "The flow revision to use for new execution") @Nullable @QueryValue Integer revision,
@@ -1096,7 +1096,9 @@ public class ExecutionController {
 
         this.controlRevision(execution.get(), revision);
 
-        return innerReplay(execution.get(), taskRunId, revision, breakpoints);
+        Flow flow = flowService.getFlowIfExecutableOrThrow(tenantService.resolveTenant(), execution.get().getNamespace(), execution.get().getFlowId(), Optional.ofNullable(revision));
+
+        return innerReplay(execution.get(), flow, taskRunId, revision, breakpoints);
     }
 
     @ExecuteOn(TaskExecutors.IO)
@@ -1111,7 +1113,7 @@ public class ExecutionController {
             }
         )
     )
-    public Mono<Execution> replayExecutionWithinputs(
+    public Mono<ApiAsyncEvent> replayExecutionWithinputs(
         @Parameter(description = "the original execution id to clone") @PathVariable String executionId,
         @Parameter(description = "The taskrun id") @Nullable @QueryValue String taskRunId,
         @Parameter(description = "The flow revision to use for new execution") @Nullable @QueryValue Integer revision,
@@ -1140,26 +1142,29 @@ public class ExecutionController {
 
         return flowInputOutput.readExecutionInputs(flow, current, inputs)
             .flatMap(newInputs -> Mono.fromCallable(() ->
-                innerReplay(current.withInputs(newInputs), taskRunId, revision, breakpoints)));
+                innerReplay(current.withInputs(newInputs), flow, taskRunId, revision, breakpoints)));
 
     }
 
-    private Execution innerReplay(Execution execution, @Nullable String taskRunId, @Nullable Integer revision, Optional<String> breakpoints) throws Exception {
-        Execution replay = executionService.replay(execution, taskRunId, revision)
-            .withBreakpoints(breakpoints.map(s -> Arrays.stream(s.split(",")).map(Breakpoint::of).toList()).orElse(null));
-        executionQueue.emit(replay);
-        eventPublisher.publishEvent(new CrudEvent<>(replay, execution, CrudEventType.CREATE));
+    private ApiAsyncEvent innerReplay(Execution execution, Flow flow, @Nullable String taskRunId, @Nullable Integer revision, Optional<String> breakpoints) throws Exception {
+        if (taskRunId != null) {
+            if (execution.getTaskRunList().stream().noneMatch(tr -> tr.getId().equals(taskRunId))) {
+                throw new IllegalArgumentException("Task run id '" + taskRunId + "' not found in execution '" + execution.getId() + "'");
+            }
+        }
+
+        var replayedExecution = executionService.replay(execution, flow, taskRunId, revision, breakpoints, true);
+        executionQueue.emit(replayedExecution);
 
         // update parent exec with replayed label
         List<Label> newLabels = new ArrayList<>(execution.getLabels());
         if (!newLabels.contains(new Label(Label.REPLAYED, "true"))) {
             newLabels.add(new Label(Label.REPLAYED, "true"));
         }
-        Execution newExecution = execution.withLabels(newLabels);
-        eventPublisher.publishEvent(new CrudEvent<>(newExecution, execution, CrudEventType.UPDATE));
-        executionRepository.save(newExecution);
+        var updateLabelsCommand = UpdateLabels.from(execution, newLabels);
+        executionCommandQueue.emit(updateLabelsCommand);
 
-        return replay;
+        return ApiAsyncEvent.from(updateLabelsCommand.eventId());
     }
 
     private void controlRevision(Execution execution, Integer revision) {
@@ -1182,7 +1187,7 @@ public class ExecutionController {
     @ExecuteOn(TaskExecutors.IO)
     @Post(uri = "/{executionId}/state")
     @Operation(tags = {"Executions"}, summary = "Change state for a taskrun in an execution")
-    public Execution updateTaskRunState(
+    public ApiAsyncEvent updateTaskRunState(
         @Parameter(description = "The execution id") @PathVariable String executionId,
         @RequestBody(description = "the taskRun id and state to apply") @Body StateRequest stateRequest
     ) throws Exception {
@@ -1191,18 +1196,14 @@ public class ExecutionController {
             return null;
         }
 
-        Flow flow = flowRepository.findByExecution(execution.get());
-
-        Execution replay = executionService.changeTaskRunState(execution.get(), flow, stateRequest.taskRunId(), stateRequest.state());
-        List<Label> newLabels = new ArrayList<>(replay.getLabels());
-        if (!newLabels.contains(new Label(Label.RESTARTED, "true"))) {
-            newLabels.add(new Label(Label.RESTARTED, "true"));
+        if (!execution.get().getState().canChangeStatus()) {
+            throw new IllegalArgumentException("You can only change the state of a task run for a terminated non killed execution.");
         }
-        replay = replay.withLabels(newLabels);
-        executionQueue.emit(replay);
-        eventPublisher.publishEvent(new CrudEvent<>(replay, execution.get(), CrudEventType.UPDATE));
 
-        return replay;
+        var executionCommand = ChangeTaskRunState.from(execution.get(), stateRequest.taskRunId(), stateRequest.state());
+        executionCommandQueue.emit(executionCommand);
+
+        return ApiAsyncEvent.from(executionCommand.eventId());
     }
 
     public record StateRequest(
@@ -1213,7 +1214,7 @@ public class ExecutionController {
     @ExecuteOn(TaskExecutors.IO)
     @Post(uri = "/{executionId}/change-status")
     @Operation(tags = {"Executions"}, summary = "Change the state of an execution")
-    public Execution updateExecutionStatus(
+    public ApiAsyncEvent updateExecutionStatus(
         @Parameter(description = "The execution id") @PathVariable String executionId,
         @Parameter(description = "The new state of the execution") @NotNull @QueryValue State.Type status
     ) throws QueueException {
@@ -1230,12 +1231,10 @@ public class ExecutionController {
             throw new IllegalArgumentException("You can only change the state of a terminated non killed execution.");
         }
 
-        Execution updated = execution.get().withState(status);
+        var executionCommand = UpdateStatus.from(execution.get(), status);
+        executionCommandQueue.emit(executionCommand);
 
-        executionQueue.emit(updated);
-        eventPublisher.publishEvent(new CrudEvent<>(updated, execution.get(), CrudEventType.UPDATE));
-
-        return updated;
+        return ApiAsyncEvent.from(executionCommand.eventId());
     }
 
     @ExecuteOn(TaskExecutors.IO)
@@ -1287,10 +1286,8 @@ public class ExecutionController {
         }
 
         for (Execution execution : executions) {
-            Execution replay = execution.withState(newStatus);
-
-            executionQueue.emit(replay);
-            eventPublisher.publishEvent(new CrudEvent<>(replay, execution, CrudEventType.UPDATE));
+            var executionCommand = UpdateStatus.from(execution, newStatus);
+            executionCommandQueue.emit(executionCommand);
         }
 
         return HttpResponse.ok(BulkResponse.builder().count(executions.size()).build());
@@ -1482,19 +1479,20 @@ public class ExecutionController {
     public Publisher<HttpResponse<?>> resumeExecution(
         @Parameter(description = "The execution id") @PathVariable String executionId,
         @RequestBody(description = "The inputs") @Nullable @Body MultipartBody inputs
-    ) throws Exception {
+    ) throws InternalException {
         Execution execution = executionService.getExecutionIfPause(tenantService.resolveTenant(), executionId, true);
         Flow flow = flowRepository.findByExecutionWithoutAcl(execution);
         return resumeFoundExecution(inputs, execution, flow);
     }
 
     protected Mono<HttpResponse<?>> resumeFoundExecution(MultipartBody inputs, Execution execution, Flow flow) {
-        Pause.Resumed resumed = createResumed();
+        io.kestra.plugin.core.flow.Pause.Resumed resumed = createResumed();
 
-        return this.executionService.resume(execution, flow, State.Type.RUNNING, inputs, resumed)
-            .handle((resumeExecution, sink) -> {
+        return this.executionService.readInputs(execution, flow, inputs)
+            .handle((resumeInputs, sink) -> {
+                var executionCommand = Resume.from(execution, resumed, resumeInputs);
                 try {
-                    this.executionQueue.emit(resumeExecution);
+                    executionCommandQueue.emit(executionCommand);
                     sink.next(HttpResponse.noContent());
                 } catch (QueueException e) {
                     sink.error(e);
@@ -1502,8 +1500,8 @@ public class ExecutionController {
             });
     }
 
-    protected Pause.Resumed createResumed() {
-        return Pause.Resumed.now();
+    protected io.kestra.plugin.core.flow.Pause.Resumed createResumed() {
+        return io.kestra.plugin.core.flow.Pause.Resumed.now();
     }
 
     @ExecuteOn(TaskExecutors.IO)
@@ -1511,7 +1509,7 @@ public class ExecutionController {
     @Operation(tags = {"Executions"}, summary = "Resume an execution from a breakpoint (in the 'BREAKPOINT' state).")
     @ApiResponse(responseCode = "204", description = "On success")
     @ApiResponse(responseCode = "409", description = "If the executions is not in the 'BREAKPOINT' state or has no breakpoint")
-    public void resumeExecutionFromBreakpoint(
+    public ApiAsyncEvent resumeExecutionFromBreakpoint(
         @Parameter(description = "The execution id") @PathVariable String executionId,
         @Parameter(description = "\"Set a list of breakpoints at specific tasks 'id.value', separated by a coma.") @QueryValue Optional<String> breakpoints
     ) throws Exception {
@@ -1523,20 +1521,10 @@ public class ExecutionController {
             throw new IllegalStateException("Execution has no breakpoint");
         }
 
-        // continue the execution: SUSPENDED taskrun will go back to CREATED, so the executor will send them to the WORKER
-        List<TaskRun> newTaskRuns = execution.getTaskRunList().stream().map(
-            taskRun -> {
-                if (taskRun.getState().isBreakpoint()) {
-                    return taskRun.withState(State.Type.CREATED);
-                }
-                return taskRun;
-            }
-        ).toList();
-        Execution newExecution = execution.withState(State.Type.RUNNING)
-            .withTaskRunList(newTaskRuns)
-            .withBreakpoints(breakpoints.map(s -> Arrays.stream(s.split(",")).map(Breakpoint::of).toList()).orElse(null));
+        var executionCommand = ResumeFromBreakpoint.from(execution, breakpoints);
+        executionCommandQueue.emit(executionCommand);
 
-        executionQueue.emit(newExecution);
+        return ApiAsyncEvent.from(executionCommand.eventId());
     }
 
     @ExecuteOn(TaskExecutors.IO)
@@ -1549,7 +1537,6 @@ public class ExecutionController {
     ) throws Exception {
         List<Execution> executions = new ArrayList<>();
         Set<ManualConstraintViolation<String>> invalids = new HashSet<>();
-        Map<String, Flow> flows = new HashMap<>();
 
         for (String executionId : executionsId) {
             Optional<Execution> execution = executionRepository.findById(tenantService.resolveTenant(), executionId);
@@ -1592,10 +1579,8 @@ public class ExecutionController {
         }
 
         for (Execution execution : executions) {
-            var flow = flows.get(execution.getFlowId() + "_" + execution.getFlowRevision()) != null ? flows.get(execution.getFlowId() + "_" + execution.getFlowRevision()) : flowRepository.findByExecutionWithoutAcl(execution);
-            flows.put(execution.getFlowId() + "_" + execution.getFlowRevision(), flow);
-            Execution resumeExecution = this.executionService.resume(execution, flow, State.Type.RUNNING, createResumed());
-            this.executionQueue.emit(resumeExecution);
+            var executionCommand = Resume.from(execution, createResumed());
+            executionCommandQueue.emit(executionCommand);
         }
 
         return HttpResponse.ok(BulkResponse.builder().count(executions.size()).build());
@@ -1650,13 +1635,17 @@ public class ExecutionController {
     @Operation(tags = {"Executions"}, summary = "Pause a running execution.")
     @ApiResponse(responseCode = "204", description = "On success")
     @ApiResponse(responseCode = "409", description = "if the executions is not running")
-    public void pauseExecution(
+    public ApiAsyncEvent pauseExecution(
         @Parameter(description = "The execution id") @PathVariable String executionId
     ) throws Exception {
         Execution execution = executionRepository.findById(tenantService.resolveTenant(), executionId).orElseThrow(NotFoundException::new);
+        if (!execution.getState().isRunning()) {
+            throw new IllegalArgumentException("The execution is not running");
+        }
 
-        Execution pausedExecution = this.executionService.pause(execution);
-        this.executionQueue.emit(pausedExecution);
+        var executionPauseCommand = Pause.from(execution);
+        executionCommandQueue.emit(executionPauseCommand);
+        return ApiAsyncEvent.from(executionPauseCommand.eventId());
     }
 
     @ExecuteOn(TaskExecutors.IO)
@@ -1703,8 +1692,8 @@ public class ExecutionController {
         }
 
         for (Execution execution : executions) {
-            Execution pausedExecution = this.executionService.pause(execution);
-            this.executionQueue.emit(pausedExecution);
+            var executionPauseCommand = Pause.from(execution);
+            executionCommandQueue.emit(executionPauseCommand);
         }
 
         return HttpResponse.ok(BulkResponse.builder().count(executions.size()).build());
@@ -1881,11 +1870,11 @@ public class ExecutionController {
         }
 
         for (Execution execution : executions) {
+            Flow flow = flowRepository.findById(execution.getTenantId(), execution.getNamespace(), execution.getFlowId(), Optional.empty()).orElseThrow();
             if (latestRevision) {
-                Flow flow = flowRepository.findById(execution.getTenantId(), execution.getNamespace(), execution.getFlowId(), Optional.empty()).orElseThrow();
-                innerReplay(execution, null, flow.getRevision(), Optional.empty());
+                innerReplay(execution, flow, null, flow.getRevision(), Optional.empty());
             } else {
-                innerReplay(execution, null, null, Optional.empty());
+                innerReplay(execution, flow, null, null, Optional.empty());
             }
         }
         return HttpResponse.ok(BulkResponse.builder().count(executions.size()).build());
@@ -2020,7 +2009,7 @@ public class ExecutionController {
     public HttpResponse<?> setLabelsOnTerminatedExecution(
         @Parameter(description = "The execution id") @PathVariable String executionId,
         @RequestBody(description = "The labels to add to the execution") @Body @NotNull @Valid List<Label> labels
-    ) {
+    ) throws QueueException {
         Optional<Execution> maybeExecution = executionRepository.findById(tenantService.resolveTenant(), executionId);
         if (maybeExecution.isEmpty()) {
             return HttpResponse.notFound();
@@ -2031,12 +2020,12 @@ public class ExecutionController {
             return HttpResponse.badRequest("The execution is not terminated");
         }
 
-        Execution newExecution = setLabelsOnTerminatedExecution(execution, labels);
+        ApiAsyncEvent event = setLabelsOnTerminatedExecution(execution, labels);
 
-        return HttpResponse.ok(newExecution);
+        return HttpResponse.ok(event);
     }
 
-    private Execution setLabelsOnTerminatedExecution(Execution execution, List<Label> labels) {
+    private ApiAsyncEvent setLabelsOnTerminatedExecution(Execution execution, List<Label> labels) throws QueueException {
         // check for system labels: none can be passed at runtime
         // as all existing labels will be passed here, we compare existing system label with the new one and fail if they are different
 
@@ -2046,21 +2035,20 @@ public class ExecutionController {
             throw new IllegalArgumentException("System labels can only be set by Kestra itself, offending label: " + first.get().key() + "=" + first.get().value());
         }
 
-        Map<String, String> newLabels = labels.stream().collect(Collectors.toMap(Label::key, Label::value));
+        List<Label> newLabels = new ArrayList<>(labels);
         existingSystemLabels.forEach(
             label -> {
                 // only add system labels
-                if (!newLabels.containsKey(label.key())) {
-                    newLabels.put(label.key(), label.value());
+                if (!newLabels.contains(label)) {
+                    newLabels.add(label);
                 }
             }
         );
 
-        Execution newExecution = execution
-            .withLabels(newLabels.entrySet().stream().map(entry -> new Label(entry.getKey(), entry.getValue())).filter(label -> !label.key().isEmpty() || !label.value().isEmpty()).toList());
-        eventPublisher.publishEvent(new CrudEvent<>(newExecution, execution, CrudEventType.UPDATE));
+        var updateLabelsCommand = UpdateLabels.from(execution, newLabels);
+        executionCommandQueue.emit(updateLabelsCommand);
 
-        return executionRepository.save(newExecution);
+        return ApiAsyncEvent.from(updateLabelsCommand.eventId());
     }
 
     @ExecuteOn(TaskExecutors.IO)
@@ -2070,7 +2058,7 @@ public class ExecutionController {
     @ApiResponse(responseCode = "422", description = "Killed with errors", content = {@Content(schema = @Schema(implementation = BulkErrorResponse.class))})
     public MutableHttpResponse<?> setLabelsOnTerminatedExecutionsByIds(
         @RequestBody(description = "The request containing a list of labels and a list of executions") @Body SetLabelsByIdsRequest setLabelsByIds
-    ) {
+    ) throws QueueException {
         List<Execution> executions = new ArrayList<>();
         Set<ManualConstraintViolation<String>> invalids = new HashSet<>();
 
@@ -2106,10 +2094,10 @@ public class ExecutionController {
             );
         }
 
-        executions.forEach(execution -> setLabelsOnTerminatedExecution(
+        executions.forEach(throwConsumer(execution -> setLabelsOnTerminatedExecution(
             execution,
             Label.deduplicate(ListUtils.concat(execution.getLabels(), setLabelsByIds.executionLabels())))
-        );
+        ));
         return HttpResponse.ok(BulkResponse.builder().count(executions.size()).build());
     }
 
@@ -2138,7 +2126,7 @@ public class ExecutionController {
         @Deprecated @Parameter(description = "A execution child filter", deprecated = true) @Nullable @QueryValue ExecutionRepositoryInterface.ChildFilter childFilter,
 
         @RequestBody(description = "The labels to add to the execution") @Body @NotNull @Valid List<Label> setLabels
-    ) {
+    ) throws QueueException {
         filters = RequestUtils.getFiltersOrDefaultToLegacyMapping(
             filters,
             query,
@@ -2165,7 +2153,7 @@ public class ExecutionController {
     @ExecuteOn(TaskExecutors.IO)
     @Post(uri = "/{executionId}/unqueue")
     @Operation(tags = {"Executions"}, summary = "Unqueue an execution")
-    public Execution unqueueExecution(
+    public ApiAsyncEvent unqueueExecution(
         @Parameter(description = "The execution id") @PathVariable String executionId,
         @Parameter(description = "The new state of the execution") @Nullable @QueryValue State.Type state
     ) throws Exception {
@@ -2174,11 +2162,14 @@ public class ExecutionController {
             return null;
         }
 
-        Execution restart = concurrencyLimitService.unqueue(execution.get(), state);
-        executionQueue.emit(restart);
-        eventPublisher.publishEvent(new CrudEvent<>(restart, execution.get(), CrudEventType.UPDATE));
+        if (execution.get().getState().getCurrent() != State.Type.QUEUED) {
+            throw new IllegalArgumentException("Only QUEUED execution can be unqueued");
+        }
 
-        return restart;
+        var unqueueCommand = Unqueue.from(execution.get(), state);
+        executionCommandQueue.emit(unqueueCommand);
+
+        return ApiAsyncEvent.from(unqueueCommand.eventId());
     }
 
     @ExecuteOn(TaskExecutors.IO)
@@ -2225,9 +2216,8 @@ public class ExecutionController {
             );
         }
         for (Execution execution : executions) {
-            Execution restart = concurrencyLimitService.unqueue(execution, state);
-            executionQueue.emit(restart);
-            eventPublisher.publishEvent(new CrudEvent<>(restart, execution, CrudEventType.UPDATE));
+            var unqueueCommand = Unqueue.from(execution, state);
+            executionCommandQueue.emit(unqueueCommand);
         }
 
         return HttpResponse.ok(BulkResponse.builder().count(executions.size()).build());
@@ -2282,7 +2272,7 @@ public class ExecutionController {
     @ExecuteOn(TaskExecutors.IO)
     @Post(uri = "/{executionId}/force-run")
     @Operation(tags = {"Executions"}, summary = "Force run an execution")
-    public Execution forceRunExecution(
+    public ApiAsyncEvent forceRunExecution(
         @Parameter(description = "The execution id") @PathVariable String executionId
     ) throws Exception {
         Optional<Execution> execution = executionRepository.findById(tenantService.resolveTenant(), executionId);
@@ -2290,11 +2280,14 @@ public class ExecutionController {
             return null;
         }
 
-        Execution restart = executionService.forceRun(execution.get());
-        executionQueue.emit(restart);
-        eventPublisher.publishEvent(new CrudEvent<>(restart, execution.get(), CrudEventType.UPDATE));
+        if (execution.get().getState().isTerminated()) {
+            throw new IllegalArgumentException("Only non terminated executions can be forced run.");
+        }
 
-        return restart;
+        var executionCommand = ForceRun.from(execution.get());
+        executionCommandQueue.emit(executionCommand);
+
+        return ApiAsyncEvent.from(executionCommand.eventId());
     }
 
     @ExecuteOn(TaskExecutors.IO)
@@ -2348,9 +2341,8 @@ public class ExecutionController {
             );
         }
         for (Execution execution : executions) {
-            Execution forceRun = executionService.forceRun(execution);
-            executionQueue.emit(forceRun);
-            eventPublisher.publishEvent(new CrudEvent<>(forceRun, execution, CrudEventType.UPDATE));
+            var executionCommand = ForceRun.from(execution);
+            executionCommandQueue.emit(executionCommand);
         }
 
         return HttpResponse.ok(BulkResponse.builder().count(executions.size()).build());
@@ -2569,7 +2561,6 @@ public class ExecutionController {
             .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=executions.csv");
     }
 
-    @Introspected
     public record LastExecutionResponse(
         @Parameter(description = "The execution's ID") String id,
         @Parameter(description = "The flow's ID") String flowId,
@@ -2589,7 +2580,6 @@ public class ExecutionController {
         }
     }
 
-    @Introspected
     public record ApiValidateExecutionInputsResponse(
         @Parameter(description = "The flow's ID")
         String id,
@@ -2600,7 +2590,6 @@ public class ExecutionController {
         List<ApiCheckFailure> checks
     ) {
 
-        @Introspected
         public record ApiInputAndValue(
             @Parameter(description = "The input")
             Input<?> input,
@@ -2615,14 +2604,12 @@ public class ExecutionController {
         ) {
         }
 
-        @Introspected
         public record ApiInputError(
             @Parameter(description = "The error message")
             String message
         ) {
         }
 
-        @Introspected
         public record ApiCheckFailure(
             @Parameter(description = "The message")
             String message,

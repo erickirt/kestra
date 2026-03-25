@@ -52,7 +52,6 @@ public class KVPurgeCleaner {
         Instant now = Instant.now();
         for (String namespace : namespaces) {
             try {
-                KVStore kvStore = kvStoreService.get(tenant, namespace, namespace);
                 List<KVEntry> expiredEntries;
                 do {
                     expiredEntries = kvMetadataRepository.find(
@@ -70,7 +69,7 @@ public class KVPurgeCleaner {
                         .map(KVEntry::from)
                         .toList();
                     if (!expiredEntries.isEmpty()){
-                        kvStore.purge(expiredEntries);
+                        kvStoreService.purge(tenant, namespace, expiredEntries);
                         log.info("{} KV store entries have been deleted on the namespace {} on tenant {}",
                             expiredEntries.size(), namespace, tenant);
                     }

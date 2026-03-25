@@ -6,12 +6,14 @@ import io.kestra.core.models.flows.FlowWithPath;
 import io.kestra.core.models.flows.FlowWithSource;
 import io.kestra.core.models.flows.GenericFlow;
 import io.kestra.core.models.validations.ModelValidator;
+import io.kestra.core.queues.BroadcastQueueInterface;
 import io.kestra.core.repositories.FlowRepositoryInterface;
-import io.kestra.core.services.FlowListenersInterface;
+import io.kestra.core.services.FlowService;
 import io.kestra.core.services.PluginDefaultService;
 import io.micronaut.context.annotation.Requires;
 import io.micronaut.scheduling.io.watch.FileWatchConfiguration;
 import jakarta.annotation.Nullable;
+import jakarta.annotation.PreDestroy;
 import jakarta.inject.Inject;
 import jakarta.inject.Singleton;
 import jakarta.validation.ConstraintViolationException;
@@ -25,6 +27,8 @@ import java.nio.file.attribute.BasicFileAttributes;
 import java.util.List;
 import java.util.Optional;
 
+import static io.kestra.core.utils.Rethrow.throwConsumer;
+
 @Singleton
 @Slf4j
 @Requires(property = "micronaut.io.watch.enabled", value = "true")
@@ -37,19 +41,21 @@ public class FileChangedEventListener {
     private FlowRepositoryInterface flowRepositoryInterface;
 
     @Inject
+    private FlowService flowService;
+
+    @Inject
     private PluginDefaultService pluginDefaultService;
 
     @Inject
     private ModelValidator modelValidator;
 
     @Inject
-    protected FlowListenersInterface flowListeners;
+    private BroadcastQueueInterface<FlowInterface> flowQueue;
 
-    FlowFilesManager flowFilesManager;
+    private FlowFilesManager flowFilesManager;
+    private Runnable cancellation;
 
-    private List<FlowWithPath> flows = new CopyOnWriteArrayList<>();
-
-    private boolean isStarted = false;
+    private final List<FlowWithPath> flows = new CopyOnWriteArrayList<>();
 
     @Inject
     public FileChangedEventListener(@Nullable FileWatchConfiguration fileWatchConfiguration, WatchService watchService) {
@@ -59,26 +65,18 @@ public class FileChangedEventListener {
 
     public void startListeningFromConfig() throws IOException, InterruptedException {
         if (fileWatchConfiguration != null && fileWatchConfiguration.isEnabled()) {
-            this.flowFilesManager = new LocalFlowFileWatcher(flowRepositoryInterface);
+            this.flowFilesManager = new LocalFlowFileWatcher(flowRepositoryInterface, flowService);
             List<Path> paths = fileWatchConfiguration.getPaths();
             this.setup(paths);
 
-            flowListeners.run();
             // Init existing flows not already in files
-            flowListeners.listen(flows -> {
-                if (!isStarted) {
-                    for (FlowInterface flow : flows) {
-                        if (this.flows.stream().noneMatch(flowWithPath -> flowWithPath.uidWithoutRevision().equals(flow.uidWithoutRevision()))) {
-                            flowToFile(flow, this.buildPath(flow));
-                            this.flows.add(FlowWithPath.of(flow, this.buildPath(flow).toString()));
-                        }
-                    }
-                    this.isStarted = true;
-                }
+            flowRepositoryInterface.findAllForAllTenants().forEach(flow -> {
+                flowToFile(flow, this.buildPath(flow));
+                flows.add(FlowWithPath.of(flow, this.buildPath(flow).toString()));
             });
 
             // Listen for new/updated/deleted flows
-            flowListeners.listen((current, previous) -> {
+            flowQueue.addListener(current -> {
                 // If deleted
                 if (current.isDeleted()) {
                     this.flows.stream().filter(flowWithPath -> flowWithPath.uidWithoutRevision().equals(current.uidWithoutRevision())).findFirst()
@@ -102,6 +100,11 @@ public class FileChangedEventListener {
         } else {
             log.info("File watching is disabled.");
         }
+    }
+
+    @PreDestroy
+    void close() {
+        cancellation.run();
     }
 
     public void startListening(List<Path> paths) throws IOException, InterruptedException {
@@ -157,10 +160,10 @@ public class FileChangedEventListener {
                                     flows.stream()
                                         .filter(flow -> flow.getPath().equals(filePath.toString()))
                                         .findFirst()
-                                        .ifPresent(flowWithPath -> {
+                                        .ifPresent(throwConsumer(flowWithPath -> {
                                             flowFilesManager.deleteFlow(flowWithPath.getTenantId(), flowWithPath.getNamespace(), flowWithPath.getId());
                                             this.flows.removeIf(fwp -> fwp.uidWithoutRevision().equals(flowWithPath.uidWithoutRevision()));
-                                        });
+                                        }));
                                 } catch (IOException e) {
                                     log.error("Error reading file: {}", entry, e);
                                 }
@@ -170,10 +173,10 @@ public class FileChangedEventListener {
                             flows.stream()
                                 .filter(flow -> flow.getPath().equals(filePath.toString()))
                                 .findFirst()
-                                .ifPresent(flowWithPath -> {
+                                .ifPresent(throwConsumer(flowWithPath -> {
                                     flowFilesManager.deleteFlow(flowWithPath.getTenantId(), flowWithPath.getNamespace(), flowWithPath.getId());
                                     this.flows.removeIf(fwp -> fwp.uidWithoutRevision().equals(flowWithPath.uidWithoutRevision()));
-                                });
+                                }));
                         }
                     }
                 } catch (Exception e) {
@@ -210,7 +213,11 @@ public class FileChangedEventListener {
 
                         if (flow.isPresent() && flows.stream().noneMatch(flowWithPath -> flowWithPath.uidWithoutRevision().equals(flow.get().uidWithoutRevision()))) {
                             flows.add(FlowWithPath.of(flow.get(), file.toString()));
-                            flowFilesManager.createOrUpdateFlow(GenericFlow.fromYaml(getTenantIdFromPath(file), content));
+                            try {
+                                flowFilesManager.createOrUpdateFlow(GenericFlow.fromYaml(getTenantIdFromPath(file), content));
+                            } catch (Exception e) {
+                                log.error("Unexpected error while watching flows", e);
+                            }
                         }
                     }
                     return FileVisitResult.CONTINUE;

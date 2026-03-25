@@ -12,10 +12,9 @@ import io.kestra.core.models.flows.State;
 import io.kestra.core.models.flows.input.SecretInput;
 import io.kestra.core.models.property.PropertyContext;
 import io.kestra.core.models.tasks.Task;
-import io.kestra.core.models.tasks.common.EncryptedString;
 import io.kestra.core.models.triggers.AbstractTrigger;
 import io.kestra.core.utils.ListUtils;
-import io.kestra.plugin.core.trigger.Schedule;
+import io.kestra.core.utils.MapUtils;
 import lombok.AllArgsConstructor;
 import lombok.With;
 
@@ -44,8 +43,8 @@ public final class RunVariables {
         );
     }
 
-    public static Map<String, Object> executionFormattedOutputMap(TaskRun taskRun) {
-        return Optional.ofNullable(taskRun.getOutputs())
+    public static Map<String, Object> executionFormattedOutputMap(TaskRun taskRun, Map<String, Object> outputs) {
+        return Optional.ofNullable(outputs)
             .map(o -> Map.of(
                     "outputs",
                     (Object) Map.of(
@@ -127,6 +126,8 @@ public final class RunVariables {
 
         Builder withInputs(Map<String, Object> inputs);
 
+        Builder withOutputs(Map<String, Object> outputs);
+
         Builder withTask(Task task);
 
         Builder withExecution(Execution execution);
@@ -173,6 +174,7 @@ public final class RunVariables {
         protected boolean decryptVariables = true;
         protected Map<String, Object> variables;
         protected Map<String, Object> inputs;
+        protected Map<String, Object> outputs;
         protected Map<String, ?> envs;
         protected Map<?, ?> globals;
         private final Optional<String> secretKey;
@@ -217,7 +219,7 @@ public final class RunVariables {
 
             // Parents
             if (taskRun != null && execution != null) {
-                List<Map<String, Object>> parents = execution.parents(taskRun);
+                List<Map<String, Object>> parents = parents(execution, taskRun);
                 builder.put("parents", parents);
                 if (!parents.isEmpty()) {
                     builder.put("parent", parents.getFirst());
@@ -247,12 +249,16 @@ public final class RunVariables {
                 builder.put("execution", executionMap.build());
 
                 if (execution.getTaskRunList() != null) {
-                    Map<String, Object> outputs = execution.outputs();
-                    if (decryptVariables) {
-                        final Secret secret = new Secret(secretKey, logger);
-                        outputs = secret.decrypt(outputs);
+                    if (!MapUtils.isEmpty(outputs)) {
+                        if (decryptVariables) {
+                            final Secret secret = new Secret(secretKey, logger);
+                            builder.put("outputs", secret.decrypt(outputs));
+                        } else {
+                            builder.put("outputs", outputs);
+                        }
+                    } else {
+                        builder.put("outputs", Collections.emptyMap());
                     }
-                    builder.put("outputs", outputs);
 
                     Map<String, Object> tasksMap = new HashMap<>();
 
@@ -338,13 +344,6 @@ public final class RunVariables {
                         outputs = secret.decrypt(outputs);
                     }
                     builder.put("trigger", outputs);
-
-                    // temporal hack to add back the `schedule`variables
-                    // will be removed in 2.0
-                    if (Schedule.class.getName().equals(execution.getTrigger().getType())) {
-                        // add back its variables inside the `schedule` variables
-                        builder.put("schedule", execution.getTrigger().getVariables());
-                    }
                 }
 
                 if (execution.getLabels() != null) {
@@ -423,6 +422,26 @@ public final class RunVariables {
                 }
             }
         }
+    }
+
+    private static List<Map<String, Object>> parents(Execution execution, TaskRun taskRun) {
+        List<TaskRun> parents = execution.findParents(taskRun);
+        Collections.reverse(parents);
+
+        List<Map<String, Object>> result = new ArrayList<>(parents.size());
+        for (TaskRun parent : parents) {
+            Map<String, Object> current = HashMap.newHashMap(2);
+
+            current.put("task", Map.of("id", parent.getTaskId()));
+
+            if (parent.getValue() != null) {
+                current.put("taskrun", Map.of("value", parent.getValue()));
+            }
+
+            result.add(current);
+        }
+
+        return result;
     }
 
     private RunVariables(){}

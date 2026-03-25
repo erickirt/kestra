@@ -2,8 +2,6 @@ package io.kestra.webserver.controllers.api;
 
 import io.kestra.core.models.executions.MetricEntry;
 import io.kestra.core.models.executions.metrics.MetricAggregations;
-import io.kestra.core.queues.QueueFactoryInterface;
-import io.kestra.core.queues.QueueInterface;
 import io.kestra.core.repositories.MetricRepositoryInterface;
 import io.kestra.core.tenant.TenantService;
 import io.kestra.webserver.responses.PagedResults;
@@ -17,11 +15,9 @@ import io.micronaut.http.annotation.PathVariable;
 import io.micronaut.http.annotation.QueryValue;
 import io.micronaut.scheduling.TaskExecutors;
 import io.micronaut.scheduling.annotation.ExecuteOn;
-import io.micronaut.validation.Validated;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import jakarta.inject.Inject;
-import jakarta.inject.Named;
 import jakarta.validation.constraints.Min;
 
 import java.time.ZonedDateTime;
@@ -29,16 +25,11 @@ import java.util.List;
 
 import static io.kestra.core.utils.DateUtils.validateTimeline;
 
-@Validated
 @Controller("/api/v1/{tenant}/metrics")
 @Requires(beans = MetricRepositoryInterface.class)
 public class MetricController {
     @Inject
     private MetricRepositoryInterface metricsRepository;
-
-    @Inject
-    @Named(QueueFactoryInterface.METRIC_QUEUE)
-    protected QueueInterface<MetricEntry> metricQueue;
 
     @Inject
     private TenantService tenantService;

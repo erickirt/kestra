@@ -31,7 +31,6 @@ import io.kestra.webserver.responses.PagedResults;
 import io.kestra.webserver.utils.CSVUtils;
 import io.kestra.webserver.utils.PageableUtils;
 import io.kestra.webserver.utils.TimeLineSearch;
-import io.micronaut.core.annotation.Introspected;
 import io.micronaut.core.annotation.Nullable;
 import io.micronaut.data.model.Pageable;
 import io.micronaut.http.HttpResponse;
@@ -40,7 +39,6 @@ import io.micronaut.http.MediaType;
 import io.micronaut.http.annotation.*;
 import io.micronaut.scheduling.TaskExecutors;
 import io.micronaut.scheduling.annotation.ExecuteOn;
-import io.micronaut.validation.Validated;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.parameters.RequestBody;
@@ -64,7 +62,6 @@ import java.util.regex.Pattern;
 
 import static io.kestra.core.utils.DateUtils.validateTimeline;
 
-@Validated
 @Controller("/api/v1/{tenant}/dashboards")
 @Slf4j
 public class DashboardController {
@@ -489,7 +486,6 @@ public class DashboardController {
         return HttpResponse.ok(byteArrayOutputStream.toByteArray()).header("Content-Disposition", "attachment; filename=\"%s\"".formatted(filename));
     }
 
-    @Introspected
     public record PreviewRequest(
         @Parameter(description = "The chart") @NotBlank String chart,
         @Parameter(description = "The filters to apply, some can override chart definition like labels & namespace") @Nullable ChartFiltersOverrides globalFilter) {}

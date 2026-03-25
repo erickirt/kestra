@@ -2,10 +2,10 @@ package io.kestra.repository.h2;
 
 import io.kestra.core.models.QueryFilter;
 import io.kestra.core.models.executions.Execution;
+import io.kestra.core.repositories.RepositoryBean;
 import io.kestra.core.utils.DateUtils;
 import io.kestra.core.utils.Either;
 import io.kestra.jdbc.repository.AbstractJdbcExecutionRepository;
-import io.kestra.jdbc.runner.AbstractJdbcExecutorStateStorage;
 import io.kestra.jdbc.services.JdbcFilterService;
 import io.micronaut.context.ApplicationContext;
 import jakarta.inject.Inject;
@@ -17,15 +17,14 @@ import org.jooq.impl.DSL;
 
 import java.util.*;
 
-@Singleton
+@RepositoryBean
 @H2RepositoryEnabled
 public class H2ExecutionRepository extends AbstractJdbcExecutionRepository {
     @Inject
     public H2ExecutionRepository(@Named("executions") H2Repository<Execution> repository,
                                  ApplicationContext applicationContext,
-                                 AbstractJdbcExecutorStateStorage executorStateStorage,
                                  JdbcFilterService filterService) {
-        super(repository, applicationContext, executorStateStorage, filterService);
+        super(repository, applicationContext, filterService);
     }
 
     @Override

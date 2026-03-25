@@ -16,13 +16,12 @@ import io.kestra.core.models.executions.ExecutionKind;
 import io.kestra.core.models.executions.ExecutionTrigger;
 import io.kestra.core.models.executions.TaskRun;
 import io.kestra.core.models.executions.statistics.DailyExecutionStatistics;
-import io.kestra.core.models.executions.statistics.ExecutionCount;
-import io.kestra.core.models.executions.statistics.Flow;
 import io.kestra.core.models.flows.FlowScope;
 import io.kestra.core.models.flows.State;
 import io.kestra.core.models.flows.State.Type;
 import io.kestra.core.models.property.Property;
 import io.kestra.core.models.tasks.ResolvedTask;
+import io.kestra.core.models.triggers.TriggerId;
 import io.kestra.core.repositories.ExecutionRepositoryInterface.ChildFilter;
 import io.kestra.core.utils.IdUtils;
 import io.kestra.core.utils.TestsUtils;
@@ -40,6 +39,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.slf4j.event.Level;
+import reactor.core.publisher.Flux;
 
 import java.io.IOException;
 import java.time.Duration;
@@ -558,85 +558,6 @@ public abstract class AbstractExecutionRepositoryTest {
             null);
         assertThat(result.size()).isEqualTo(11);
         assertThat(result.get(10).getExecutionCounts().get(State.Type.SUCCESS)).isEqualTo(1L);
-    }
-
-    @SuppressWarnings("OptionalGetWithoutIsPresent")
-    @Test
-    protected void executionsCount() throws InterruptedException {
-        var tenant = TestsUtils.randomTenant(this.getClass().getSimpleName());
-        for (int i = 0; i < 14; i++) {
-            executionRepository.save(builder(
-                tenant,
-                State.Type.SUCCESS,
-                i < 2 ? "first" : (i < 5 ? "second" : "third")
-            ).build());
-        }
-
-        // mysql need some time ...
-        Thread.sleep(500);
-
-        List<ExecutionCount> result = executionRepository.executionCounts(
-            tenant,
-            List.of(
-                new Flow(NAMESPACE, "first"),
-                new Flow(NAMESPACE, "second"),
-                new Flow(NAMESPACE, "third"),
-                new Flow(NAMESPACE, "missing")
-            ),
-            null,
-            ZonedDateTime.now().minusDays(10),
-            ZonedDateTime.now(),
-            null
-        );
-        assertThat(result.size()).isEqualTo(4);
-        assertThat(result.stream().filter(executionCount -> executionCount.getFlowId().equals("first")).findFirst().get().getCount()).isEqualTo(2L);
-        assertThat(result.stream().filter(executionCount -> executionCount.getFlowId().equals("second")).findFirst().get().getCount()).isEqualTo(3L);
-        assertThat(result.stream().filter(executionCount -> executionCount.getFlowId().equals("third")).findFirst().get().getCount()).isEqualTo(9L);
-        assertThat(result.stream().filter(executionCount -> executionCount.getFlowId().equals("missing")).findFirst().get().getCount()).isEqualTo(0L);
-
-        result = executionRepository.executionCounts(
-            tenant,
-            List.of(
-                new Flow(NAMESPACE, "first"),
-                new Flow(NAMESPACE, "second"),
-                new Flow(NAMESPACE, "third")
-            ),
-            List.of(State.Type.SUCCESS),
-            null,
-            null,
-            null
-        );
-        assertThat(result.size()).isEqualTo(3);
-        assertThat(result.stream().filter(executionCount -> executionCount.getFlowId().equals("first")).findFirst().get().getCount()).isEqualTo(2L);
-        assertThat(result.stream().filter(executionCount -> executionCount.getFlowId().equals("second")).findFirst().get().getCount()).isEqualTo(3L);
-        assertThat(result.stream().filter(executionCount -> executionCount.getFlowId().equals("third")).findFirst().get().getCount()).isEqualTo(9L);
-
-        result = executionRepository.executionCounts(
-            tenant,
-            null,
-            null,
-            null,
-            null,
-            List.of(NAMESPACE)
-        );
-        assertThat(result.size()).isEqualTo(1);
-        assertThat(result.stream().filter(executionCount -> executionCount.getNamespace().equals(NAMESPACE)).findFirst().get().getCount()).isEqualTo(14L);
-    }
-
-    @Test
-    protected void update() {
-        var tenant = TestsUtils.randomTenant(this.getClass().getSimpleName());
-        Execution execution = ExecutionFixture.EXECUTION_1(tenant);
-        executionRepository.save(execution);
-
-        Label label = new Label("key", "value");
-        Execution updated = execution.toBuilder().labels(List.of(label)).build();
-        executionRepository.update(updated);
-
-        Optional<Execution> validation = executionRepository.findById(tenant, updated.getId());
-        assertThat(validation.isPresent()).isTrue();
-        assertThat(validation.get().getLabels().size()).isEqualTo(1);
-        assertThat(validation.get().getLabels().getFirst()).isEqualTo(label);
     }
 
     @Test
@@ -1272,4 +1193,28 @@ inject(tenant);
         }
     }
 
+    @Test
+    protected void shouldFindExecutionByTrigger() {
+        // GIVEN
+        String tenant = TestsUtils.randomTenant(this.getClass().getSimpleName());
+        Execution execution = ExecutionFixture.EXECUTION_1(tenant);
+
+        TriggerId trigger = TriggerId.of(execution.getTenantId(), execution.getNamespace(), execution.getFlowId(), "trigger");
+
+        execution = execution
+            .toBuilder()
+            .trigger(ExecutionTrigger
+                .builder()
+                .id(trigger.uid())
+                .build()
+            )
+            .build();
+        executionRepository.save(execution);
+
+        // WHEN
+        Flux<Execution> flux = executionRepository.findAllByTrigger(trigger);
+
+        // THEN
+        assertThat(flux.collectList().block()).map(Execution::getId).isEqualTo(List.of(execution.getId()));
+    }
 }

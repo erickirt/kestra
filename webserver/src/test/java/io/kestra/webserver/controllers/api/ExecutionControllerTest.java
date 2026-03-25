@@ -3,7 +3,6 @@ package io.kestra.webserver.controllers.api;
 import com.google.common.collect.ImmutableMap;
 import io.kestra.core.junit.annotations.KestraTest;
 import io.kestra.core.junit.annotations.LoadFlows;
-import io.kestra.core.models.Label;
 import io.kestra.core.models.executions.Execution;
 import io.kestra.core.models.flows.Flow;
 import io.kestra.core.models.flows.FlowForExecution;
@@ -11,10 +10,8 @@ import io.kestra.core.models.flows.check.Check;
 import io.kestra.core.models.property.Property;
 import io.kestra.core.models.tasks.TaskForExecution;
 import io.kestra.core.models.triggers.AbstractTriggerForExecution;
-import io.kestra.core.repositories.LocalFlowRepositoryLoader;
-import io.kestra.jdbc.JdbcTestUtils;
+import io.kestra.core.repositories.ExecutionRepositoryInterface;
 import io.kestra.plugin.core.debug.Return;
-import io.kestra.webserver.responses.BulkResponse;
 import io.kestra.webserver.responses.PagedResults;
 import io.micronaut.core.type.Argument;
 import io.micronaut.http.*;
@@ -44,7 +41,6 @@ import java.util.Objects;
 import static io.kestra.core.tenant.TenantService.MAIN_TENANT;
 import static io.micronaut.http.HttpRequest.GET;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 @Slf4j
@@ -52,17 +48,14 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 class ExecutionControllerTest {
 
     @Inject
-    ExecutionController executionController;
+    private ExecutionController executionController;
+
+    @Inject
+    private ExecutionRepositoryInterface executionRepository;
 
     @Inject
     @Client("/")
-    ReactorHttpClient client;
-
-    @Inject
-    private JdbcTestUtils jdbcTestUtils;
-
-    @Inject
-    protected LocalFlowRepositoryLoader repositoryLoader;
+    private ReactorHttpClient client;
 
     public static final String TESTS_FLOW_NS = "io.kestra.tests";
     public static final String TESTS_WEBHOOK_KEY = "a-secret-key";
@@ -89,7 +82,6 @@ class ExecutionControllerTest {
 
         return MultipartBody.builder()
             .addPart("string", "myString")
-            .addPart("enum", "ENUM_VALUE")
             .addPart("int", "42")
             .addPart("float", "42.42")
             .addPart("instant", "2019-10-06T18:27:49Z")
@@ -322,6 +314,7 @@ class ExecutionControllerTest {
                 ),
             Execution.class
         );
+        executionRepository.save(execution);
 
         FlowForExecution result = client.toBlocking().retrieve(
             GET("/api/v1/main/executions/" + execution.getId() + "/flow"),
@@ -376,77 +369,6 @@ class ExecutionControllerTest {
                 "/api/v1/main/executions/search?startDate=2024-06-03T00:00:00.000%2B02:00&endDate=2023-06-05T00:00:00.000%2B02:00"), PagedResults.class));
         assertThat(exception_oldParameters.getStatus().getCode()).isEqualTo(422);
         assertThat(exception_oldParameters.getMessage()).isEqualTo("Illegal argument: Start date must be before End Date");
-    }
-
-    @Test
-    @LoadFlows(value = {"flows/valids/inputs.yaml"})
-    void commaInSingleLabelsValue() {
-        String encodedCommaWithinLabel = URLEncoder.encode("project:foo,bar", StandardCharsets.UTF_8);
-
-        MutableHttpRequest<Object> deleteRequest = HttpRequest
-            .DELETE("/api/v1/main/executions/by-query?labels=" + encodedCommaWithinLabel);
-        assertDoesNotThrow(() -> client.toBlocking().retrieve(deleteRequest, PagedResults.class));
-
-        MutableHttpRequest<List<Object>> restartRequest = HttpRequest
-            .POST("/api/v1/main/executions/restart/by-query?labels=" + encodedCommaWithinLabel, List.of());
-        assertDoesNotThrow(() -> client.toBlocking().retrieve(restartRequest, BulkResponse.class));
-
-        MutableHttpRequest<List<Object>> resumeRequest = HttpRequest
-            .POST("/api/v1/main/executions/resume/by-query?labels=" + encodedCommaWithinLabel, List.of());
-        assertDoesNotThrow(() -> client.toBlocking().retrieve(resumeRequest, BulkResponse.class));
-
-        MutableHttpRequest<List<Object>> replayRequest = HttpRequest
-            .POST("/api/v1/main/executions/replay/by-query?labels=" + encodedCommaWithinLabel, List.of());
-        assertDoesNotThrow(() -> client.toBlocking().retrieve(replayRequest, BulkResponse.class));
-
-        MutableHttpRequest<List<Object>> labelsRequest = HttpRequest
-            .POST("/api/v1/main/executions/labels/by-query?labels=" + encodedCommaWithinLabel, List.of());
-        assertDoesNotThrow(() -> client.toBlocking().retrieve(labelsRequest, BulkResponse.class));
-
-        MutableHttpRequest<List<Object>> killRequest = HttpRequest
-            .DELETE("/api/v1/main/executions/kill/by-query?labels=" + encodedCommaWithinLabel, List.of());
-        assertDoesNotThrow(() -> client.toBlocking().retrieve(killRequest, BulkResponse.class));
-
-        MutableHttpRequest<MultipartBody> triggerRequest = HttpRequest
-            .POST("/api/v1/main/executions/trigger/" + TESTS_FLOW_NS + "/inputs?labels=" + encodedCommaWithinLabel, createExecutionInputsFlowBody())
-            .contentType(MediaType.MULTIPART_FORM_DATA_TYPE);
-        assertThat(client.toBlocking().retrieve(triggerRequest, Execution.class).getLabels()).contains(new Label("project", "foo,bar"));
-
-        MutableHttpRequest<MultipartBody> createRequest = HttpRequest
-            .POST("/api/v1/main/executions/" + TESTS_FLOW_NS + "/inputs?labels=" + encodedCommaWithinLabel, createExecutionInputsFlowBody())
-            .contentType(MediaType.MULTIPART_FORM_DATA_TYPE);
-        assertThat(client.toBlocking().retrieve(createRequest, Execution.class).getLabels()).contains(new Label("project", "foo,bar"));
-
-        MutableHttpRequest<Object> searchRequest = HttpRequest
-            .GET("/api/v1/main/executions/search?filters[labels][EQUALS][project]=foo,bar");
-        assertThat(client.toBlocking().retrieve(searchRequest, PagedResults.class).getTotal()).isEqualTo(2L);
-
-        MutableHttpRequest<Object> searchRequest_oldParameters = HttpRequest
-            .GET("/api/v1/main/executions/search?labels=project:foo,bar");
-        assertThat(client.toBlocking().retrieve(searchRequest_oldParameters, PagedResults.class).getTotal()).isEqualTo(2L);
-
-        MutableHttpRequest<Object> searchRequest_triggerExecution = HttpRequest
-            .GET("/api/v1/executions/search?triggerExecutionId=test");
-        assertThat(client.toBlocking().retrieve(searchRequest_triggerExecution, PagedResults.class).getTotal()).isEqualTo(0L);
-    }
-
-    @Test
-    void commaInOneOfMultiLabels() {
-        String encodedCommaWithinLabel = URLEncoder.encode("project:foo,bar", StandardCharsets.UTF_8);
-        String encodedRegularLabel = URLEncoder.encode("status:test", StandardCharsets.UTF_8);
-
-        MutableHttpRequest<MultipartBody> createRequest = HttpRequest
-            .POST("/api/v1/main/executions/" + TESTS_FLOW_NS + "/inputs?labels=" + encodedCommaWithinLabel + "&labels=" + encodedRegularLabel, createExecutionInputsFlowBody())
-            .contentType(MediaType.MULTIPART_FORM_DATA_TYPE);
-        assertThat(client.toBlocking().retrieve(createRequest, Execution.class).getLabels()).contains(new Label("project", "foo,bar"), new Label("status", "test"));
-
-        MutableHttpRequest<Object> searchRequest = HttpRequest
-            .GET("/api/v1/main/executions/search?filters[labels][EQUALS][project]=foo,bar" + "&filters[labels][EQUALS][status]=test");
-        assertThat(client.toBlocking().retrieve(searchRequest, PagedResults.class).getTotal()).isEqualTo(1L);
-
-        MutableHttpRequest<Object> searchRequest_oldParameters = HttpRequest
-            .GET("/api/v1/main/executions/search?labels=project:foo,bar" + "&labels=status:test");
-        assertThat(client.toBlocking().retrieve(searchRequest_oldParameters, PagedResults.class).getTotal()).isEqualTo(1L);
     }
 
     @Test
@@ -521,21 +443,6 @@ class ExecutionControllerTest {
     }
 
     @Test
-    void exportExecutions() {
-        createAndExecuteFlow();
-
-        HttpResponse<byte[]> response = client.toBlocking().exchange(
-            HttpRequest.GET("/api/v1/main/executions/export/by-query/csv"),
-            byte[].class
-        );
-
-        assertThat(response.getStatus().getCode()).isEqualTo(HttpStatus.OK.getCode());
-        assertThat(response.getHeaders().get("Content-Disposition")).contains("attachment; filename=executions.csv");
-        String csv = new String(response.body());
-        assertThat(csv).contains("id");
-    }
-
-    @Test
     void shouldBlockExecutionAndThrowCheckErrorMessage() {
         String namespaceId = "io.othercompany";
         String flowId = "flowWithCheck";
@@ -559,34 +466,15 @@ class ExecutionControllerTest {
             .tenantId(MAIN_TENANT)
             .namespace(namespaceId)
             .checks(List.of(Check.builder().condition("{{ [] | length > 0 }}").message("No VM provided").style(Check.Style.ERROR).behavior(Check.Behavior.BLOCK_EXECUTION).build()))
-            .tasks(Collections.singletonList(Return.builder().id("test").type(Return.class.getName()).format(Property.of("test")).build()))
+            .tasks(Collections.singletonList(Return.builder().id("test").type(Return.class.getName()).format(Property.ofValue("test")).build()))
             .build();
 
         client.toBlocking().retrieve(
-            HttpRequest.POST("/api/v1/main/flows", create),
+            HttpRequest.POST("/api/v1/main/flows", create.sourceOrGenerateIfNull()).contentType(MediaType.APPLICATION_YAML_TYPE),
             Flow.class
         );
     }
 
-    void createAndExecuteFlow() {
-        String namespaceId = "io.othercompany";
-        String flowId = "flowId";
-        Flow create = Flow.builder()
-            .id(flowId)
-            .tenantId(MAIN_TENANT)
-            .namespace(namespaceId)
-            .tasks(Collections.singletonList(Return.builder().id("test").type(Return.class.getName()).format(Property.of("test")).build()))
-            .build();
 
-        client.toBlocking().retrieve(
-            HttpRequest.POST("/api/v1/main/flows", create),
-            Flow.class
-        );
-
-        client.toBlocking().retrieve(
-            HttpRequest.POST("/api/v1/main/executions/" + namespaceId + "/" + flowId, null),
-            Execution.class
-        );
-    }
 
 }

@@ -3,6 +3,7 @@ package io.kestra.core.server;
 import com.google.common.annotations.VisibleForTesting;
 import io.kestra.core.contexts.KestraContext;
 import io.kestra.core.models.ServerType;
+import io.kestra.core.repositories.ServiceInstanceRepositoryInterface;
 import io.kestra.core.server.ServiceStateTransition.Result;
 import io.micronaut.context.annotation.Context;
 import io.micronaut.context.annotation.Requires;
@@ -28,6 +29,7 @@ import static io.kestra.core.server.ServiceLivenessManager.OnStateTransitionFail
 @Context
 @Requires(property = "kestra.server-type")
 @Requires(beans = ServiceLivenessUpdater.class)
+@Requires(beans = ServiceInstanceRepositoryInterface.class)
 @Slf4j
 public class ServiceLivenessManager extends AbstractServiceLivenessTask {
 
@@ -250,10 +252,10 @@ public class ServiceLivenessManager extends AbstractServiceLivenessTask {
         stateLock.lock();
         // Optional callback to be executed at the end.
         Runnable returnCallback = null;
-        
+
         localServiceState = localServiceState(service);
         try {
-            
+
             if (localServiceState == null) {
                 return null; // service has been unregistered.
             }

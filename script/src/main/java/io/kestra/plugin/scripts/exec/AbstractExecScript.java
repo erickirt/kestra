@@ -47,6 +47,7 @@ public abstract class AbstractExecScript extends Task implements NamespaceFilesI
     )
     @PluginProperty
     @Builder.Default
+    @NotNull
     @Valid
     protected TaskRunner<?> taskRunner = Docker.builder()
         .type(Docker.class.getName())
@@ -108,14 +109,6 @@ public abstract class AbstractExecScript extends Task implements NamespaceFilesI
     protected Property<TargetOS> targetOS = Property.ofValue(TargetOS.AUTO);
 
     @Schema(
-        title = "Deprecated - use the 'taskRunner' property instead.",
-        description = "Only used if the `taskRunner` property is not set",
-        deprecated = true
-    )
-    @Deprecated
-    protected DockerOptions docker;
-
-    @Schema(
         title = "The task runner container image, only used if the task runner is container-based."
     )
     public abstract Property<String> getContainerImage();
@@ -148,17 +141,11 @@ public abstract class AbstractExecScript extends Task implements NamespaceFilesI
     }
 
     protected CommandsWrapper commands(RunContext runContext) throws IllegalVariableEvaluationException {
-        if (this.getRunner() == null) {
-            runContext.logger().debug("Using task runner '{}'", this.getTaskRunner().getType());
-        }
-
         Map<String, String> renderedEnv = runContext.render(this.getEnv()).asMap(String.class, String.class);
         return new CommandsWrapper(runContext)
             .withEnv(renderedEnv.isEmpty() ? new HashMap<>() : renderedEnv)
-            .withRunnerType(this.getRunner())
             .withContainerImage(runContext.render(this.getContainerImage()).as(String.class).orElse(null))
             .withTaskRunner(this.getTaskRunner())
-            .withDockerOptions(this.getDocker() != null ? this.injectDefaults(runContext, this.getDocker()) : null)
             .withNamespaceFiles(this.getNamespaceFiles())
             .withInputFiles(this.getInputFiles())
             .withOutputFiles(runContext.render(this.getOutputFiles()).asList(String.class))

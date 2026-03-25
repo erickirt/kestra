@@ -31,7 +31,7 @@ class AppTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"standalone", "executor", "indexer", "scheduler", "webserver", "worker", "local"})
+    @ValueSource(strings = {"standalone", "executor", "indexer", "scheduler", "webserver", "worker", "controller", "local"})
     void testServerCommandHelp(String serverType) {
         final ByteArrayOutputStream out = new ByteArrayOutputStream();
         System.setOut(new PrintStream(out));
@@ -52,12 +52,12 @@ class AppTest {
         final ByteArrayOutputStream out = new ByteArrayOutputStream();
         System.setErr(new PrintStream(out));
 
-        final String[] argsWithMissingParams = new String[]{"flow", "namespace", "update"};
+        final String[] argsWithMissingParams = new String[]{"flow", "delete"};
 
         assertThat(App.runCli(argsWithMissingParams)).isEqualTo(2);
 
-        assertThat(out.toString()).startsWith("Missing required parameters: ");
-        assertThat(out.toString()).contains("Usage: kestra flow namespace update ");
+        assertThat(out.toString()).contains("Missing required parameters: ");
+        assertThat(out.toString()).contains("Usage: kestra flow delete ");
         assertThat(out.toString()).doesNotContain("MissingParameterException: ");
     }
 }

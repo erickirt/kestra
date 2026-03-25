@@ -12,6 +12,8 @@ import io.kestra.core.models.Label;
 import io.kestra.core.models.TenantInterface;
 import io.kestra.core.models.flows.sla.SLA;
 import io.kestra.core.models.tasks.WorkerGroup;
+import io.kestra.core.queues.event.BroadcastEvent;
+import io.kestra.core.queues.event.DispatchEvent;
 import io.kestra.core.serializers.JacksonMapper;
 
 import java.util.AbstractMap;
@@ -27,7 +29,7 @@ import java.util.stream.Collectors;
  * The base interface for FLow.
  */
 @JsonDeserialize(as = GenericFlow.class)
-public interface FlowInterface extends FlowId, SoftDeletable<FlowInterface>, TenantInterface, HasUID, HasSource {
+public interface FlowInterface extends FlowId, SoftDeletable<FlowInterface>, TenantInterface, HasUID, HasSource, BroadcastEvent {
 
     Pattern YAML_REVISION_MATCHER = Pattern.compile("(?m)^revision: \\d+\n?");
 
@@ -67,6 +69,11 @@ public interface FlowInterface extends FlowId, SoftDeletable<FlowInterface>, Ten
     @JsonIgnore
     default String uid() {
         return FlowId.uid(this);
+    }
+
+    @Override
+    default String key() {
+        return uid();
     }
 
     @JsonIgnore
@@ -134,7 +141,7 @@ public interface FlowInterface extends FlowId, SoftDeletable<FlowInterface>, Ten
      * This class must only be used for testing purpose or for handling backward-compatibility.
      */
     class SourceGenerator {
-        private static final ObjectMapper NON_DEFAULT_OBJECT_MAPPER = JacksonMapper.ofJson()
+        private static final ObjectMapper NON_DEFAULT_OBJECT_MAPPER = JacksonMapper.ofJson(true)
             .copy()
             .setDefaultPropertyInclusion(JsonInclude.Include.NON_DEFAULT);
 

@@ -31,6 +31,7 @@ public abstract class KestraContext {
 
     // Properties
     public static final String KESTRA_SERVER_TYPE = "kestra.server-type";
+    public static final String KESTRA_ALLOCATED_CPU_CORES = "kestra.allocated-cpu-cores";
 
     // Those properties are injected bases on the CLI args.
     private static final String KESTRA_WORKER_MAX_NUM_THREADS = "kestra.worker.max-num-threads";
@@ -62,6 +63,13 @@ public abstract class KestraContext {
      * @return The {@link ServerType}.
      */
     public abstract ServerType getServerType();
+
+    /**
+     * Number of CPU cores allocated for the Kestra process.
+     * It defaults to the number of available CPU cores but can be overridden by setting {@link #KESTRA_ALLOCATED_CPU_CORES} configuration property.
+     * It is used everywhere we compute a number of threads based on the number of CPU cores instead of directly relying on the number of available CPU cores.
+     */
+    public abstract int getAllocatedCpuCores();
 
     public abstract Optional<Integer> getWorkerMaxNumThreads();
 
@@ -136,6 +144,12 @@ public abstract class KestraContext {
                 .orElse(ServerType.STANDALONE);
         }
 
+        @Override
+        public int getAllocatedCpuCores() {
+            return applicationContext.getProperty(KESTRA_ALLOCATED_CPU_CORES, Integer.class)
+                .orElse(Runtime.getRuntime().availableProcessors());
+        }
+
         /** {@inheritDoc} **/
         @Override
         public Optional<Integer> getWorkerMaxNumThreads() {
@@ -168,6 +182,10 @@ public abstract class KestraContext {
         @Override
         public void shutdown() {
             if (isShutdown.compareAndSet(false, true)) {
+                if (!applicationContext.isRunning()) {
+                    log.info("Kestra server - Shutdown already in progress, skipping");
+                    return;
+                }
                 log.info("Kestra server - Shutdown initiated");
                 applicationContext.close();
                 log.info("Kestra server - Shutdown completed");

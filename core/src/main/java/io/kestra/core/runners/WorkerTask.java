@@ -29,10 +29,10 @@ public class WorkerTask extends WorkerJob {
     private Task task;
 
     @NotNull
-    private RunContext runContext;
+    private WorkerTaskData data;
 
     @Nullable
-    private ExecutionKind  executionKind;
+    private ExecutionKind executionKind;
 
     /**
      * {@inheritDoc}

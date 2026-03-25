@@ -1,12 +1,11 @@
 package io.kestra.webserver.controllers.api;
 
 import io.kestra.core.exceptions.FlowProcessingException;
-import io.kestra.core.models.FetchVersion;
 import io.kestra.core.models.QueryFilter;
 import io.kestra.core.models.namespaces.files.NamespaceFileMetadata;
 import io.kestra.core.repositories.ArrayListTotal;
-import io.kestra.core.repositories.NamespaceFileMetadataRepositoryInterface;
 import io.kestra.core.services.FlowService;
+import io.kestra.core.namespace.NamespaceFileService;
 import io.kestra.core.storages.*;
 import io.kestra.core.tenant.TenantService;
 import io.micronaut.core.annotation.Nullable;
@@ -19,7 +18,6 @@ import io.micronaut.http.multipart.CompletedFileUpload;
 import io.micronaut.http.server.types.files.StreamedFile;
 import io.micronaut.scheduling.TaskExecutors;
 import io.micronaut.scheduling.annotation.ExecuteOn;
-import io.micronaut.validation.Validated;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import jakarta.inject.Inject;
@@ -45,7 +43,6 @@ import java.util.zip.ZipOutputStream;
 import static io.kestra.core.utils.Rethrow.throwConsumer;
 
 @Slf4j
-@Validated
 @Controller("/api/v1/{tenant}/namespaces")
 public class NamespaceFileController {
     public static final String FLOWS_FOLDER = "_flows";
@@ -58,7 +55,7 @@ public class NamespaceFileController {
     @Inject
     private NamespaceFactory namespaceFactory;
     @Inject
-    private NamespaceFileMetadataRepositoryInterface namespaceFileMetadataRepository;
+    private NamespaceFileService namespaceFileService;
 
     private final List<Pattern> forbiddenPathPatterns = List.of(
         Pattern.compile("/" + FLOWS_FOLDER + "(/.*)?$")
@@ -135,10 +132,7 @@ public class NamespaceFileController {
 
         encodedPath = Optional.ofNullable(encodedPath).orElse(URI.create("/"));
 
-        ArrayListTotal<NamespaceFileMetadata> namespaceFileMetadata = namespaceFileMetadataRepository.find(Pageable.UNPAGED, tenantService.resolveTenant(), List.of(
-            QueryFilter.builder().field(QueryFilter.Field.NAMESPACE).operation(QueryFilter.Op.EQUALS).value(namespace).build(),
-            QueryFilter.builder().field(QueryFilter.Field.PATH).operation(QueryFilter.Op.EQUALS).value(encodedPath.getPath()).build()
-        ), true, FetchVersion.ALL);
+        ArrayListTotal<NamespaceFileMetadata> namespaceFileMetadata = namespaceFileService.findRevisions(tenantService.resolveTenant(), namespace, encodedPath.getPath());
 
         if (namespaceFileMetadata.stream()
             .filter(NamespaceFileMetadata::isLast)
@@ -343,7 +337,7 @@ public class NamespaceFileController {
 
         String zombieAwarePathToDelete = pathWithoutScheme;
         String parentPathToCheck = NamespaceFileMetadata.parentPath(zombieAwarePathToDelete);
-        while (parentPathToCheck != null && !parentPathToCheck.equals("/") && namespaceFileMetadataRepository.find(Pageable.from(1, 2), tenantService.resolveTenant(), List.of(
+        while (parentPathToCheck != null && !parentPathToCheck.equals("/") && namespaceFileService.findMetadata(Pageable.from(1, 2), tenantService.resolveTenant(), List.of(
             QueryFilter.builder().field(QueryFilter.Field.PARENT_PATH).operation(QueryFilter.Op.EQUALS).value(parentPathToCheck).build()
         ), false).size() == 1) {
             zombieAwarePathToDelete = parentPathToCheck;

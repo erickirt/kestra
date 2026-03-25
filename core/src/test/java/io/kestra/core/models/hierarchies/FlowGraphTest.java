@@ -8,10 +8,10 @@ import io.kestra.core.junit.annotations.KestraTest;
 import io.kestra.core.junit.annotations.LoadFlows;
 import io.kestra.core.models.executions.Execution;
 import io.kestra.core.models.flows.FlowWithSource;
-import io.kestra.core.models.triggers.Trigger;
+import io.kestra.core.scheduler.model.TriggerState;
 import io.kestra.core.queues.QueueException;
-import io.kestra.core.repositories.TriggerRepositoryInterface;
 import io.kestra.core.runners.TestRunnerUtils;
+import io.kestra.core.scheduler.store.TriggerStateStore;
 import io.kestra.core.serializers.YamlParser;
 import io.kestra.core.services.GraphService;
 import io.kestra.core.utils.GraphUtils;
@@ -26,6 +26,7 @@ import java.io.File;
 import java.io.IOException;
 import java.net.URL;
 import java.nio.file.Files;
+import java.time.Clock;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -41,7 +42,7 @@ class FlowGraphTest {
     private GraphService graphService;
 
     @Inject
-    private TriggerRepositoryInterface triggerRepositoryInterface;
+    private TriggerStateStore triggerStateStore;
 
     @Inject
     private TestRunnerUtils runnerUtils;
@@ -143,29 +144,16 @@ class FlowGraphTest {
     }
 
     @Test
-    void each() throws IllegalVariableEvaluationException, IOException {
-        FlowWithSource flow = this.parse("flows/valids/each-sequential-nested.yaml");
-        FlowGraph flowGraph = GraphUtils.flowGraph(flow, null);
-
-        assertThat(flowGraph.getNodes().size()).isEqualTo(13);
-        assertThat(flowGraph.getEdges().size()).isEqualTo(12);
-        assertThat(flowGraph.getClusters().size()).isEqualTo(2);
-
-        assertThat(edge(flowGraph, ".*1-1_return", cluster(flowGraph, ".*1-2_each").getStart()).getRelation().getRelationType()).isEqualTo(RelationType.DYNAMIC);
-        assertThat(edge(flowGraph, ".*1-2_each", ".*1-2-1_return").getRelation().getRelationType()).isEqualTo(RelationType.DYNAMIC);
-    }
-
-    @Test
-    void eachParallel() throws IllegalVariableEvaluationException, IOException {
-        FlowWithSource flow = this.parse("flows/valids/each-parallel-nested.yaml");
+    void forEach() throws IllegalVariableEvaluationException, IOException {
+        FlowWithSource flow = this.parse("flows/valids/foreach-nested.yaml");
         FlowGraph flowGraph = GraphUtils.flowGraph(flow, null);
 
         assertThat(flowGraph.getNodes().size()).isEqualTo(11);
         assertThat(flowGraph.getEdges().size()).isEqualTo(10);
         assertThat(flowGraph.getClusters().size()).isEqualTo(2);
 
-        assertThat(edge(flowGraph, ".*1_each", cluster(flowGraph, ".*2-1_seq").getStart()).getRelation().getRelationType()).isEqualTo(RelationType.DYNAMIC);
-        assertThat(flowGraph.getClusters().get(1).getNodes().size()).isEqualTo(5);
+        assertThat(edge(flowGraph, ".*each0", cluster(flowGraph, ".*each1").getStart()).getRelation().getRelationType()).isEqualTo(RelationType.DYNAMIC);
+        assertThat(edge(flowGraph, ".*each1", ".*p1").getRelation().getRelationType()).isEqualTo(RelationType.DYNAMIC);
     }
 
     @Test
@@ -199,28 +187,23 @@ class FlowGraphTest {
     }
 
     @Test
-    @ExecuteFlow("flows/valids/each-sequential.yaml")
-    void eachWithExecution(Execution execution) throws IllegalVariableEvaluationException, IOException {
-        FlowWithSource flow = this.parse("flows/valids/each-sequential.yaml");
+    @ExecuteFlow("flows/valids/foreach-non-concurrent.yaml")
+    void forEachWithExecution(Execution execution) throws IllegalVariableEvaluationException, IOException {
+        FlowWithSource flow = this.parse("flows/valids/foreach-non-concurrent.yaml");
         FlowGraph flowGraph = GraphUtils.flowGraph(flow, execution);
 
-        assertThat(flowGraph.getNodes().size()).isEqualTo(21);
-        assertThat(flowGraph.getEdges().size()).isEqualTo(22);
-        assertThat(flowGraph.getClusters().size()).isEqualTo(4);
+        assertThat(flowGraph.getNodes().size()).isEqualTo(11);
+        assertThat(flowGraph.getEdges().size()).isEqualTo(12);
+        assertThat(flowGraph.getClusters().size()).isEqualTo(1);
 
-        assertThat(edge(flowGraph, ".*1-1_value 1", ".*1-1_value 2").getRelation().getValue()).isEqualTo("value 2");
-        assertThat(edge(flowGraph, ".*1-1_value 2", ".*1-1_value 3").getRelation().getValue()).isEqualTo("value 3");
-        assertThat(edge(flowGraph, ".*1-2_value 3", cluster(flowGraph, ".*1_each\\.failed", "value 3").getEnd())).isNotNull();
-
-        assertThat(edge(flowGraph, ".*failed_value 1", ".*1-2_value 1").getTarget()).matches(".*1-2_value 1");
+        assertThat(edge(flowGraph, ".*log_value 1", ".*log_value 2").getRelation().getValue()).isEqualTo("value 2");
+        assertThat(edge(flowGraph, ".*log_value 2", ".*log_value 3").getRelation().getValue()).isEqualTo("value 3");
     }
 
     @Test
     void trigger() throws IllegalVariableEvaluationException, IOException, FlowProcessingException {
         FlowWithSource flow = this.parse("flows/valids/trigger-flow-listener.yaml");
-        triggerRepositoryInterface.save(
-            Trigger.of(flow, flow.getTriggers().getFirst()).toBuilder().disabled(true).build()
-        );
+        triggerStateStore.save(TriggerState.of(flow, flow.getTriggers().getFirst(), 0).disabled(Clock.systemDefaultZone(), true));
 
         FlowGraph flowGraph = graphService.flowGraph(flow, null);
 
@@ -228,7 +211,7 @@ class FlowGraphTest {
         assertThat(flowGraph.getEdges().size()).isEqualTo(5);
         assertThat(flowGraph.getClusters().size()).isEqualTo(1);
         AbstractGraph triggerGraph = flowGraph.getNodes().stream().filter(e -> e instanceof GraphTrigger).findFirst().orElseThrow();
-        assertThat(((GraphTrigger) triggerGraph).getTrigger().getDisabled()).isTrue();
+        assertThat(((GraphTrigger) triggerGraph).getTrigger().isDisabled()).isTrue();
     }
 
     @Test

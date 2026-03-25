@@ -12,32 +12,25 @@ import io.kestra.core.models.dashboards.filters.*;
 import io.kestra.core.models.executions.Execution;
 import io.kestra.core.models.executions.ExecutionKind;
 import io.kestra.core.models.executions.statistics.DailyExecutionStatistics;
-import io.kestra.core.models.executions.statistics.ExecutionCount;
 import io.kestra.core.models.executions.statistics.ExecutionStatistics;
-import io.kestra.core.models.executions.statistics.Flow;
 import io.kestra.core.models.flows.FlowScope;
 import io.kestra.core.models.flows.State;
-import io.kestra.core.queues.QueueFactoryInterface;
-import io.kestra.core.queues.QueueInterface;
+import io.kestra.core.models.triggers.TriggerId;
 import io.kestra.core.repositories.ArrayListTotal;
 import io.kestra.core.repositories.ExecutionRepositoryInterface;
-import io.kestra.core.runners.Executor;
-import io.kestra.core.runners.ExecutorState;
+import io.kestra.executor.ExecutorContext;
 import io.kestra.core.utils.DateUtils;
 import io.kestra.core.utils.Either;
 import io.kestra.core.utils.ListUtils;
-import io.kestra.jdbc.runner.AbstractJdbcExecutorStateStorage;
-import io.kestra.jdbc.runner.JdbcQueueIndexerInterface;
+import io.kestra.executor.ExecutionStateStore;
 import io.kestra.jdbc.services.JdbcFilterService;
 import io.kestra.plugin.core.dashboard.data.Executions;
 import io.micronaut.context.ApplicationContext;
 import io.micronaut.context.event.ApplicationEventPublisher;
 import io.micronaut.data.model.Pageable;
-import io.micronaut.inject.qualifiers.Qualifiers;
 import jakarta.annotation.Nullable;
 import lombok.Getter;
 import lombok.SneakyThrows;
-import org.apache.commons.lang3.tuple.Pair;
 import org.jooq.*;
 import org.jooq.Record;
 import org.jooq.impl.DSL;
@@ -58,7 +51,7 @@ import java.util.stream.Stream;
 
 import static io.kestra.core.models.QueryFilter.Field.KIND;
 
-public abstract class AbstractJdbcExecutionRepository extends AbstractJdbcCrudRepository<Execution> implements ExecutionRepositoryInterface, JdbcQueueIndexerInterface<Execution> {
+public abstract class AbstractJdbcExecutionRepository extends AbstractJdbcCrudRepository<Execution> implements ExecutionRepositoryInterface, ExecutionStateStore {
     private static final int FETCH_SIZE = 100;
     private static final Field<String> STATE_CURRENT_FIELD = field("state_current", String.class);
     private static final Field<String> NAMESPACE_FIELD = field("namespace", String.class);
@@ -66,10 +59,6 @@ public abstract class AbstractJdbcExecutionRepository extends AbstractJdbcCrudRe
     private static final Condition NORMAL_KIND_CONDITION = field("kind").isNull().or(field("kind").eq(ExecutionKind.NORMAL.name()));
 
     private final ApplicationEventPublisher<CrudEvent<Execution>> eventPublisher;
-    private final ApplicationContext applicationContext;
-    protected final AbstractJdbcExecutorStateStorage executorStateStorage;
-
-    private QueueInterface<Execution> executionQueue;
     private final KestraConfig kestraConfig;
 
     private final JdbcFilterService filterService;
@@ -101,27 +90,13 @@ public abstract class AbstractJdbcExecutionRepository extends AbstractJdbcCrudRe
     public AbstractJdbcExecutionRepository(
         io.kestra.jdbc.AbstractJdbcRepository<Execution> jdbcRepository,
         ApplicationContext applicationContext,
-        AbstractJdbcExecutorStateStorage executorStateStorage,
         JdbcFilterService filterService
     ) {
         super(jdbcRepository);
-        this.executorStateStorage = executorStateStorage;
         this.eventPublisher = applicationContext.getBean(ApplicationEventPublisher.class);
         this.kestraConfig = applicationContext.getBean(KestraConfig.class);
 
-        // we inject ApplicationContext in order to get the ExecutionQueue lazy to avoid StackOverflowError
-        this.applicationContext = applicationContext;
-
         this.filterService = filterService;
-    }
-
-    @SuppressWarnings("unchecked")
-    private QueueInterface<Execution> executionQueue() {
-        if (this.executionQueue == null) {
-            this.executionQueue = applicationContext.getBean(QueueInterface.class, Qualifiers.byName(QueueFactoryInterface.EXECUTION_NAMED));
-        }
-
-        return this.executionQueue;
     }
 
     /**
@@ -132,6 +107,15 @@ public abstract class AbstractJdbcExecutionRepository extends AbstractJdbcCrudRe
                                                        String triggerExecutionId) {
         var condition = field("trigger_execution_id").eq(triggerExecutionId);
         return findAsync(tenantId, condition);
+    }
+
+    /**
+     * {@inheritDoc}
+     **/
+    @Override
+    public Flux<Execution> findAllByTrigger(TriggerId trigger) {
+        var condition = field("trigger_id").eq(trigger.uid());
+        return findAsync(trigger.getTenantId(), condition);
     }
 
     /**
@@ -153,6 +137,11 @@ public abstract class AbstractJdbcExecutionRepository extends AbstractJdbcCrudRe
     @Override
     public Optional<Execution> findByIdWithoutAcl(String tenantId, String id) {
         return findById(tenantId, id, false, false);
+    }
+
+    @Override
+    public Execution findById(String id) {
+        return findOne(DSL.noCondition(), KEY_FIELD.eq(id)).orElse(null);
     }
 
     public Optional<Execution> findById(String tenantId, String id, boolean allowDeleted, boolean withAccessControl) {
@@ -649,113 +638,6 @@ public abstract class AbstractJdbcExecutionRepository extends AbstractJdbcCrudRe
     }
 
     @Override
-    public List<ExecutionCount> executionCounts(
-        @Nullable String tenantId,
-        List<Flow> flows,
-        @Nullable List<State.Type> states,
-        @Nullable ZonedDateTime startDate,
-        @Nullable ZonedDateTime endDate,
-        @Nullable List<String> namespaces) {
-        ZonedDateTime finalStartDate = startDate == null ? ZonedDateTime.now().minusDays(30) : startDate;
-        ZonedDateTime finalEndDate = endDate == null ? ZonedDateTime.now() : endDate;
-
-        List<ExecutionCount> result = this.jdbcRepository
-            .getDslContextWrapper()
-            .transactionResult(configuration -> {
-                DSLContext dslContext = DSL.using(configuration);
-
-                SelectConditionStep<?> select = dslContext
-                    .select(List.of(
-                        field("namespace"),
-                        field("flow_id"),
-                        DSL.count().as("count")
-                    ))
-                    .from(this.jdbcRepository.getTable())
-                    .where(this.defaultFilter(tenantId))
-                    .and(NORMAL_KIND_CONDITION);
-
-                select = select.and(START_DATE_FIELD.greaterOrEqual(finalStartDate.toOffsetDateTime()));
-                select = select.and(START_DATE_FIELD.lessOrEqual(finalEndDate.toOffsetDateTime()));
-
-                if (!ListUtils.isEmpty(states)) {
-                    select = select.and(this.statesFilter(states));
-                }
-
-                List<Condition> orConditions = new ArrayList<>();
-                orConditions.addAll(ListUtils.emptyOnNull(flows)
-                    .stream()
-                    .map(flow -> DSL.and(
-                        field("namespace").eq(flow.getNamespace()),
-                        field("flow_id").eq(flow.getFlowId())
-                    ))
-                    .toList());
-
-                orConditions.addAll(
-                    ListUtils.emptyOnNull(namespaces)
-                        .stream()
-                        .map(np -> field("namespace").eq(np))
-                        .toList()
-                );
-
-                // add flows filters
-                select = select.and(DSL.or(orConditions));
-
-                // map result to flow
-                return select
-                    .groupBy(List.of(
-                        field("namespace"),
-                        field("flow_id")
-                    ))
-                    .fetchMany()
-                    .resultsOrRows()
-                    .getFirst()
-                    .result()
-                    .stream()
-                    .map(record -> new ExecutionCount(
-                        record.getValue("namespace", String.class),
-                        record.getValue("flow_id", String.class),
-                        record.getValue("count", Long.class)
-                    ))
-                    .toList();
-            });
-
-        List<ExecutionCount> counts = new ArrayList<>();
-        // fill missing with count at 0
-        if (!ListUtils.isEmpty(flows)) {
-            counts.addAll(flows
-                .stream()
-                .map(flow -> result
-                    .stream()
-                    .filter(executionCount -> executionCount.getNamespace().equals(flow.getNamespace()) &&
-                        executionCount.getFlowId().equals(flow.getFlowId())
-                    )
-                    .findFirst()
-                    .orElse(new ExecutionCount(
-                        flow.getNamespace(),
-                        flow.getFlowId(),
-                        0L
-                    ))
-                )
-                .toList());
-        }
-
-        if (!ListUtils.isEmpty(namespaces)) {
-            Map<String, Long> groupedByNamespace = result.stream()
-                .collect(Collectors.groupingBy(
-                    ExecutionCount::getNamespace,
-                    Collectors.summingLong(ExecutionCount::getCount)
-                ));
-
-            counts.addAll(groupedByNamespace.entrySet()
-                .stream()
-                .map(entry -> new ExecutionCount(entry.getKey(), null, entry.getValue()))
-                .toList());
-        }
-
-        return counts;
-    }
-
-    @Override
     public List<Execution> lastExecutions(
         String tenantId,
         @Nullable List<FlowFilter> flows
@@ -816,8 +698,6 @@ public abstract class AbstractJdbcExecutionRepository extends AbstractJdbcCrudRe
         Map<Field<Object>, Object> fields = this.jdbcRepository.persistFields(deleted);
         this.jdbcRepository.persist(deleted, fields);
 
-        executionQueue().emit(deleted);
-
         eventPublisher.publishEvent(CrudEvent.delete(deleted));
 
         return deleted;
@@ -846,7 +726,8 @@ public abstract class AbstractJdbcExecutionRepository extends AbstractJdbcCrudRe
             });
     }
 
-    public Executor lock(String executionId, Function<Pair<Execution, ExecutorState>, Pair<Executor, ExecutorState>> function) {
+    @Override
+    public Optional<ExecutorContext> lock(String executionId, Function<Execution, ExecutorContext> function) {
         return this.jdbcRepository
             .getDslContextWrapper()
             .transactionResult(configuration -> {
@@ -863,20 +744,17 @@ public abstract class AbstractJdbcExecutionRepository extends AbstractJdbcCrudRe
 
                 // not ready for now, skip and wait for a first state
                 if (execution.isEmpty()) {
-                    return null;
+                    return Optional.empty();
                 }
 
-                ExecutorState executorState = executorStateStorage.get(context, execution.get());
-                Pair<Executor, ExecutorState> pair = function.apply(Pair.of(execution.get(), executorState));
+                ExecutorContext executor = function.apply(execution.get());
 
-                if (pair != null) {
-                    this.jdbcRepository.persist(pair.getKey().getExecution(), context, null);
-                    this.executorStateStorage.save(context, pair.getRight());
-
-                    return pair.getKey();
+                if (executor != null) {
+                    this.jdbcRepository.persist(executor.getExecution(), context, null);
+                    return Optional.of(executor);
                 }
 
-                return null;
+                return Optional.empty();
             });
     }
 

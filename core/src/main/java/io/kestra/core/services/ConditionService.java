@@ -7,16 +7,14 @@ import io.kestra.core.models.conditions.ConditionContext;
 import io.kestra.core.models.executions.Execution;
 import io.kestra.core.models.flows.Flow;
 import io.kestra.core.models.flows.FlowInterface;
-import io.kestra.core.models.tasks.ResolvedTask;
 import io.kestra.core.models.triggers.AbstractTrigger;
 import io.kestra.core.models.triggers.multipleflows.MultipleCondition;
-import io.kestra.core.models.triggers.multipleflows.MultipleConditionStorageInterface;
+import io.kestra.core.models.triggers.multipleflows.MultipleConditionStateStore;
 import io.kestra.core.runners.RunContext;
 import io.kestra.core.runners.RunContextFactory;
 import io.kestra.core.utils.ListUtils;
 import io.micronaut.core.annotation.Nullable;
 
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import jakarta.inject.Inject;
@@ -33,7 +31,7 @@ public class ConditionService {
     private RunContextFactory runContextFactory;
 
     @VisibleForTesting
-    public boolean isValid(Condition condition, FlowInterface flow, @Nullable Execution execution, MultipleConditionStorageInterface multipleConditionStorage) {
+    public boolean isValid(Condition condition, FlowInterface flow, @Nullable Execution execution, MultipleConditionStateStore multipleConditionStorage) {
         ConditionContext conditionContext = this.conditionContext(
             runContextFactory.of(flow, execution),
             flow,
@@ -69,7 +67,7 @@ public class ConditionService {
     }
 
     /**
-     * Check that all conditions are valid.
+     * Check that all conditions of type {@link ScheduleCondition} are valid.
      * Warning, this method throws if a condition cannot be evaluated.
      */
     public boolean areValid(List<Condition> conditions, ConditionContext conditionContext) throws InternalException {
@@ -78,7 +76,7 @@ public class ConditionService {
             .allMatch(throwPredicate(condition -> condition.test(conditionContext)));
     }
 
-    public boolean isValid(AbstractTrigger trigger, Flow flow, Execution execution, MultipleConditionStorageInterface multipleConditionStorage) {
+    public boolean isValid(AbstractTrigger trigger, Flow flow, Execution execution, MultipleConditionStateStore multipleConditionStorage) {
         if (ListUtils.isEmpty(trigger.getConditions())) {
             // important to do it here avoid creating a costly conditionContext if not needed
             return true;
@@ -94,7 +92,7 @@ public class ConditionService {
         return this.valid(flow, trigger.getConditions(), conditionContext);
     }
 
-    public boolean isValid(MultipleCondition preconditions, Flow flow, Execution execution, MultipleConditionStorageInterface multipleConditionStorage) {
+    public boolean isValid(MultipleCondition preconditions, Flow flow, Execution execution, MultipleConditionStateStore multipleConditionStorage) {
         if (preconditions == null || preconditions.getConditions() == null) {
             // important to do it here avoid creating a costly conditionContext if not needed
             return true;
@@ -116,7 +114,7 @@ public class ConditionService {
         }
     }
 
-    public ConditionContext conditionContext(RunContext runContext, FlowInterface flow, @Nullable Execution execution, MultipleConditionStorageInterface multipleConditionStorage) {
+    public ConditionContext conditionContext(RunContext runContext, FlowInterface flow, @Nullable Execution execution, MultipleConditionStateStore multipleConditionStorage) {
         return ConditionContext.builder()
             .flow(flow)
             .execution(execution)
@@ -156,28 +154,5 @@ public class ConditionService {
                     return false;
                 }
             });
-    }
-
-    @SuppressWarnings("deprecation")
-    public List<ResolvedTask> findValidListeners(Flow flow, Execution execution) {
-        if (flow == null || flow.getListeners() == null) {
-            return Collections.emptyList();
-        }
-
-        ConditionContext conditionContext = this.conditionContext(
-            runContextFactory.of(flow, execution),
-            flow,
-            execution
-        );
-
-        return flow
-            .getListeners()
-            .stream()
-            .filter(listener -> listener.getConditions() == null ||
-                this.valid(flow, listener.getConditions(), conditionContext)
-            )
-            .flatMap(listener -> listener.getTasks().stream())
-            .map(ResolvedTask::of)
-            .toList();
     }
 }

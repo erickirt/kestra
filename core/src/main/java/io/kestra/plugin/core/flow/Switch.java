@@ -20,7 +20,6 @@ import io.kestra.core.runners.FlowableUtils;
 import io.kestra.core.runners.RunContext;
 import io.kestra.core.utils.GraphUtils;
 import io.kestra.core.validations.SwitchTaskValidation;
-import io.micronaut.core.annotation.Introspected;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.*;
 import lombok.experimental.SuperBuilder;
@@ -88,7 +87,6 @@ import static io.kestra.core.utils.Rethrow.throwPredicate;
     },
     aliases = "io.kestra.core.tasks.flows.Switch"
 )
-@Introspected
 @SwitchTaskValidation
 public class Switch extends Task implements FlowableTask<Switch.Output> {
     @NotNull
@@ -215,7 +213,7 @@ public class Switch extends Task implements FlowableTask<Switch.Output> {
     @Builder
     @Getter
     public static class Output implements io.kestra.core.models.tasks.Output {
-        private String value;
         private boolean defaults;
+        private String value;
     }
 }

@@ -6,6 +6,7 @@ import io.kestra.core.models.executions.Execution;
 import io.kestra.core.models.executions.LogEntry;
 import io.kestra.core.repositories.LogRepositoryInterface;
 import io.kestra.core.runners.TestRunnerUtils;
+import io.kestra.core.services.TaskOutputService;
 import jakarta.inject.Inject;
 import java.time.temporal.ChronoUnit;
 import java.util.stream.Stream;
@@ -31,6 +32,9 @@ class PurgeLogsTest {
     @Inject
     protected TestRunnerUtils runnerUtils;
 
+    @Inject
+    private TaskOutputService taskOutputService;
+
     @Test
     @LoadFlows("flows/valids/purge_logs_no_arguments.yaml")
     void run_with_no_arguments() throws Exception {
@@ -49,7 +53,7 @@ class PurgeLogsTest {
 
         assertTrue(execution.getState().isSuccess());
         assertThat(execution.getTaskRunList()).hasSize(1);
-        assertThat((int) execution.getTaskRunList().getFirst().getOutputs().get("count")).isPositive();
+        assertThat((int) taskOutputService.getOutputs(execution.getTaskRunList().getFirst()).get("count")).isPositive();
     }
 
     @Test
@@ -79,7 +83,7 @@ class PurgeLogsTest {
         Execution execution = runnerUtils.runOne(MAIN_TENANT, "io.kestra.tests", "purge_logs_execution_only");
 
         assertTrue(execution.getState().isSuccess());
-        var outputs = execution.getTaskRunList().getFirst().getOutputs();
+        var outputs = taskOutputService.getOutputs(execution.getTaskRunList().getFirst());
         assertThat((int) outputs.get("executionLogsCount")).isPositive();
         assertThat((int) outputs.get("nonExecutionLogsCount")).isZero();
     }
@@ -111,7 +115,7 @@ class PurgeLogsTest {
         Execution execution = runnerUtils.runOne(MAIN_TENANT, "io.kestra.tests", "purge_logs_trigger_only");
 
         assertTrue(execution.getState().isSuccess());
-        var outputs = execution.getTaskRunList().getFirst().getOutputs();
+        var outputs = taskOutputService.getOutputs(execution.getTaskRunList().getFirst());
         assertThat((int) outputs.get("executionLogsCount")).isZero();
         assertThat((int) outputs.get("nonExecutionLogsCount")).isPositive();
     }
@@ -127,7 +131,7 @@ class PurgeLogsTest {
 
         assertTrue(execution.getState().isSuccess());
         assertThat(execution.getTaskRunList().size()).isEqualTo(1);
-        assertThat(execution.getTaskRunList().getFirst().getOutputs().get("count")).as(failingReason).isEqualTo(resultCount);
+        assertThat(taskOutputService.getOutputs(execution.getTaskRunList().getFirst()).get("count")).as(failingReason).isEqualTo(resultCount);
     }
 
     static Stream<Arguments> buildArguments() {

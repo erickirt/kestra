@@ -7,12 +7,10 @@ import io.kestra.cli.commands.namespaces.NamespaceCommand;
 import io.kestra.cli.commands.plugins.PluginCommand;
 import io.kestra.cli.commands.servers.ServerCommand;
 import io.kestra.cli.commands.sys.SysCommand;
-import io.kestra.cli.commands.templates.TemplateCommand;
 import io.kestra.cli.services.EnvironmentProvider;
 import io.micronaut.configuration.picocli.MicronautFactory;
 import io.micronaut.context.ApplicationContext;
 import io.micronaut.context.ApplicationContextBuilder;
-import io.micronaut.core.annotation.Introspected;
 import org.slf4j.bridge.SLF4JBridgeHandler;
 import picocli.CommandLine;
 import picocli.CommandLine.Command;
@@ -35,14 +33,12 @@ import java.util.stream.Stream;
         PluginCommand.class,
         ServerCommand.class,
         FlowCommand.class,
-        TemplateCommand.class,
         SysCommand.class,
         ConfigCommand.class,
         NamespaceCommand.class,
         MigrationCommand.class
     }
 )
-@Introspected
 public class App implements Callable<Integer> {
 
     public static void main(String[] args) {

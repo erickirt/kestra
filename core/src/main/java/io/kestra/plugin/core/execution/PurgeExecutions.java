@@ -36,12 +36,12 @@ import java.util.List;
             code = """
             id: purge_exections
             namespace: system
-            
+
             tasks:
               - id: purge
                 type: io.kestra.plugin.core.execution.PurgeExecutions
                 endDate: "{{ now() | dateAdd(-1, 'MONTHS') }}"
-                states: 
+                states:
                   - KILLED
                   - FAILED
                   - WARNING
@@ -120,7 +120,7 @@ public class PurgeExecutions extends Task implements RunnableTask<PurgeExecution
 
     @Override
     public PurgeExecutions.Output run(RunContext runContext) throws Exception {
-        ExecutionService executionService = ((DefaultRunContext)runContext).getApplicationContext().getBean(ExecutionService.class);
+        ExecutionService executionService = ((DefaultRunContext)runContext).services().additionalService(ExecutionService.class);
 
         // validate that this namespace is authorized on the target namespace / all namespaces
         var flowInfo = runContext.flowInfo();
@@ -147,6 +147,7 @@ public class PurgeExecutions extends Task implements RunnableTask<PurgeExecution
 
         return Output.builder()
             .executionsCount(purgeResult.getExecutionsCount())
+            .taskOutputsCount(purgeResult.getTaskOutputsCount())
             .logsCount(purgeResult.getLogsCount())
             .storagesCount(purgeResult.getStoragesCount())
             .metricsCount(purgeResult.getMetricsCount())
@@ -160,6 +161,11 @@ public class PurgeExecutions extends Task implements RunnableTask<PurgeExecution
             title = "The count of deleted executions"
         )
         private int executionsCount;
+
+        @Schema(
+            title = "The count of deleted task outputs"
+        )
+        private int taskOutputsCount;
 
         @Schema(
             title = "The count of deleted logs"

@@ -17,15 +17,11 @@ import io.kestra.core.models.dashboards.DataFilter;
 import io.kestra.core.models.dashboards.DataFilterKPI;
 import io.kestra.core.models.dashboards.filters.AbstractFilter;
 import io.kestra.core.models.flows.*;
-import io.kestra.core.models.triggers.Trigger;
 import io.kestra.core.models.validations.ManualConstraintViolation;
 import io.kestra.core.models.validations.ModelValidator;
 import io.kestra.core.queues.QueueException;
-import io.kestra.core.queues.QueueFactoryInterface;
-import io.kestra.core.queues.QueueInterface;
 import io.kestra.core.repositories.ArrayListTotal;
 import io.kestra.core.repositories.FlowRepositoryInterface;
-import io.kestra.core.services.FlowService;
 import io.kestra.core.services.PluginDefaultService;
 import io.kestra.core.utils.DateUtils;
 import io.kestra.core.utils.Either;
@@ -36,7 +32,6 @@ import io.kestra.plugin.core.dashboard.data.Flows;
 import io.micronaut.context.ApplicationContext;
 import io.micronaut.context.event.ApplicationEventPublisher;
 import io.micronaut.data.model.Pageable;
-import io.micronaut.inject.qualifiers.Qualifiers;
 import jakarta.annotation.Nullable;
 import jakarta.validation.ConstraintViolationException;
 import lombok.Getter;
@@ -54,8 +49,6 @@ import java.time.ZonedDateTime;
 import java.util.*;
 import java.util.stream.Collectors;
 
-import static io.kestra.core.utils.Rethrow.throwConsumer;
-
 @Slf4j
 public abstract class AbstractJdbcFlowRepository extends AbstractJdbcRepository implements FlowRepositoryInterface {
 
@@ -65,8 +58,6 @@ public abstract class AbstractJdbcFlowRepository extends AbstractJdbcRepository 
     public static final Field<String> SOURCE_FIELD = field("source_code", String.class);
     public static final Field<Integer> REVISION_FIELD  =  field("revision", Integer.class);
 
-    private final QueueInterface<FlowInterface> flowQueue;
-    private final QueueInterface<Trigger> triggerQueue;
     private final ApplicationEventPublisher<CrudEvent<FlowInterface>> eventPublisher;
     private final ModelValidator modelValidator;
     private final PluginDefaultService pluginDefaultService;
@@ -85,8 +76,6 @@ public abstract class AbstractJdbcFlowRepository extends AbstractJdbcRepository 
         this.modelValidator = applicationContext.getBean(ModelValidator.class);
         this.eventPublisher = applicationContext.getBean(ApplicationEventPublisher.class);
         this.pluginDefaultService = applicationContext.getBean(PluginDefaultService.class);
-        this.triggerQueue = applicationContext.getBean(QueueInterface.class, Qualifiers.byName(QueueFactoryInterface.TRIGGER_NAMED));
-        this.flowQueue = applicationContext.getBean(QueueInterface.class, Qualifiers.byName(QueueFactoryInterface.FLOW_NAMED));
         this.jdbcRepository.setDeserializer(record -> {
             String source = record.get("value", String.class);
             String namespace = record.get("namespace", String.class);
@@ -691,7 +680,7 @@ public abstract class AbstractJdbcFlowRepository extends AbstractJdbcRepository 
         return this.save(flow, CrudEventType.CREATE);
     }
 
-    @SneakyThrows({QueueException.class, FlowProcessingException.class})
+    @SneakyThrows({FlowProcessingException.class})
     @Override
     public FlowWithSource update(GenericFlow flow, FlowInterface previous) throws ConstraintViolationException {
         // Check Flow with defaults
@@ -711,16 +700,11 @@ public abstract class AbstractJdbcFlowRepository extends AbstractJdbcRepository 
             throw checkUpdate.get();
         }
 
-        // Delete removed triggers
-        FlowService
-            .findRemovedTrigger(flowWithDefault, previousFlow)
-            .forEach(throwConsumer(abstractTrigger -> triggerQueue.delete(Trigger.of(flowWithDefault, abstractTrigger))));
-
         // Persist
         return this.save(flow, CrudEventType.UPDATE);
     }
 
-    @SneakyThrows({QueueException.class, FlowProcessingException.class})
+    @SneakyThrows(FlowProcessingException.class)
     @VisibleForTesting
     public FlowWithSource save(GenericFlow flow, CrudEventType crudEventType) throws ConstraintViolationException {
 
@@ -745,7 +729,6 @@ public abstract class AbstractJdbcFlowRepository extends AbstractJdbcRepository 
 
         this.jdbcRepository.persist(flow, fields);
 
-        flowQueue.emit(flow);
         eventPublisher.publishEvent(new CrudEvent<>(flow, nullOrExisting, crudEventType));
 
         return flowWithSource.toBuilder().revision(revision).build();
@@ -759,6 +742,25 @@ public abstract class AbstractJdbcFlowRepository extends AbstractJdbcRepository 
             .orElseThrow(() -> new IllegalStateException("Flow " + flow.getId() + " doesn't exists"));
 
         Optional<FlowWithSource> last = this.findByIdWithSource(flow.getTenantId(), flow.getNamespace(), flow.getId());
+        if (last.isEmpty()) {
+            throw new IllegalStateException("Flow " + flow.getId() + " doesn't exists");
+        }
+
+        if (!last.get().getRevision().equals(existingFlow.getRevision())) {
+            throw new IllegalStateException("Trying to deleted old revision, wanted " + existingFlow.getRevision() + ", last revision is " + last.get().getRevision());
+        }
+
+        return deleteFlow(flow, existingFlow);
+    }
+
+    @SneakyThrows
+    @Override
+    public FlowWithSource deleteWithoutAcl(FlowInterface flow) {
+        Optional<FlowWithSource> existing = this.findByIdWithSourceWithoutAcl(flow.getTenantId(), flow.getNamespace(), flow.getId(), Optional.ofNullable(flow.getRevision()));
+        FlowWithSource existingFlow = existing
+            .orElseThrow(() -> new IllegalStateException("Flow " + flow.getId() + " doesn't exists"));
+
+        Optional<FlowWithSource> last = this.findByIdWithSourceWithoutAcl(flow.getTenantId(), flow.getNamespace(), flow.getId(), Optional.empty());
         if (last.isEmpty()) {
             throw new IllegalStateException("Flow " + flow.getId() + " doesn't exists");
         }
@@ -804,7 +806,6 @@ public abstract class AbstractJdbcFlowRepository extends AbstractJdbcRepository 
 
         this.jdbcRepository.persist(deleted, fields);
 
-        flowQueue.emit(deleted);
         eventPublisher.publishEvent(CrudEvent.delete(flow));
         return deleted;
     }

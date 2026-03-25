@@ -25,12 +25,12 @@ public interface MaintenanceService {
      */
     interface MaintenanceListener {
         /**
-         * Invoked when cluster is entering maintenance mode.
+         * Invoked when the cluster is entering maintenance mode.
          */
         void onMaintenanceModeEnter();
 
         /**
-         * Invoked when cluster is exiting maintenance mode.
+         * Invoked when the cluster is exiting maintenance mode.
          */
         void onMaintenanceModeExit();
     }
@@ -50,7 +50,7 @@ public interface MaintenanceService {
 
         @Override
         public Disposable listen(MaintenanceListener listener) {
-            return Disposable.of(() -> {}); // NOOP
+           return Disposable.of(() -> {}); // NOOP
         }
     }
 }

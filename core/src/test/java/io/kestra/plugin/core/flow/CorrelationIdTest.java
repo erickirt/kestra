@@ -7,21 +7,17 @@ import io.kestra.core.junit.annotations.LoadFlows;
 import io.kestra.core.models.Label;
 import io.kestra.core.models.executions.Execution;
 import io.kestra.core.models.flows.State;
+import io.kestra.core.queues.BroadcastQueueInterface;
 import io.kestra.core.queues.QueueException;
-import io.kestra.core.queues.QueueFactoryInterface;
-import io.kestra.core.queues.QueueInterface;
 import io.kestra.core.runners.TestRunnerUtils;
 import jakarta.inject.Inject;
-import jakarta.inject.Named;
 import java.util.Optional;
 import java.util.concurrent.TimeoutException;
+
 import org.junit.jupiter.api.Test;
 
 @KestraTest(startRunner = true)
 class CorrelationIdTest {
-    @Inject
-    @Named(QueueFactoryInterface.EXECUTION_NAMED)
-    private QueueInterface<Execution> executionQueue;
     @Inject
     private TestRunnerUtils runnerUtils;
 

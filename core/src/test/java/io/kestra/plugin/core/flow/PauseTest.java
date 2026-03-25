@@ -13,6 +13,7 @@ import io.kestra.core.queues.QueueException;
 import io.kestra.core.repositories.FlowRepositoryInterface;
 import io.kestra.core.runners.TestRunnerUtils;
 import io.kestra.core.services.ExecutionService;
+import io.kestra.core.services.TaskOutputService;
 import io.kestra.core.storages.StorageInterface;
 import io.micronaut.http.MediaType;
 import io.micronaut.http.multipart.CompletedPart;
@@ -71,7 +72,7 @@ public class PauseTest {
 
     @FlakyTest(description = "This test is too flaky and it always pass in JDBC and Kafka")
     @Test
-    @LoadFlows("flows/valids/each-parallel-pause.yml")
+    @LoadFlows("flows/valids/foreach-concurrent-pause.yaml")
     void parallelDelay() throws Exception {
         suite.runParallelDelay(runnerUtils);
     }
@@ -159,6 +160,9 @@ public class PauseTest {
         @Inject
         StorageInterface storageInterface;
 
+        @Inject
+        TaskOutputService taskOutputService;
+
         public void run(TestRunnerUtils runnerUtils) throws Exception {
             Execution execution = runnerUtils.runOneUntilPaused(MAIN_TENANT, "io.kestra.tests", "pause-test", null, null, Duration.ofSeconds(30));
             String executionId = execution.getId();
@@ -197,8 +201,8 @@ public class PauseTest {
             );
 
             assertThat(execution.getTaskRunList().getFirst().getState().getHistories().stream().filter(history -> history.getState() == State.Type.PAUSED).count()).isEqualTo(1L);
-            assertThat(execution.getTaskRunList().getFirst().getState().getHistories().stream().filter(history -> history.getState() == State.Type.RUNNING).count()).isEqualTo(2L);
-            assertThat(execution.getTaskRunList()).hasSize(3);
+            assertThat(execution.getTaskRunList().getFirst().getState().getHistories().stream().filter(history -> history.getState() == State.Type.RUNNING).count()).isEqualTo(1L);
+            assertThat(execution.getTaskRunList()).hasSize(2);
         }
 
         public void runDurationFromInput(TestRunnerUtils runnerUtils) throws Exception {
@@ -215,15 +219,15 @@ public class PauseTest {
             );
 
             assertThat(execution.getTaskRunList().getFirst().getState().getHistories().stream().filter(history -> history.getState() == State.Type.PAUSED).count()).isEqualTo(1L);
-            assertThat(execution.getTaskRunList().getFirst().getState().getHistories().stream().filter(history -> history.getState() == State.Type.RUNNING).count()).isEqualTo(2L);
-            assertThat(execution.getTaskRunList()).hasSize(3);
+            assertThat(execution.getTaskRunList().getFirst().getState().getHistories().stream().filter(history -> history.getState() == State.Type.RUNNING).count()).isEqualTo(1L);
+            assertThat(execution.getTaskRunList()).hasSize(2);
         }
 
         public void runParallelDelay(TestRunnerUtils runnerUtils) throws TimeoutException, QueueException {
-            Execution execution = runnerUtils.runOne(MAIN_TENANT, "io.kestra.tests", "each-parallel-pause", Duration.ofSeconds(30));
+            Execution execution = runnerUtils.runOne(MAIN_TENANT, "io.kestra.tests", "foreach-concurrent-pause", Duration.ofSeconds(30));
 
             assertThat(execution.getState().getCurrent()).isEqualTo(State.Type.SUCCESS);
-            assertThat(execution.getTaskRunList()).hasSize(7);
+            assertThat(execution.getTaskRunList()).hasSize(4);
         }
 
         public void runTimeout(TestRunnerUtils runnerUtils) throws Exception {
@@ -239,7 +243,7 @@ public class PauseTest {
             );
 
             assertThat(execution.getTaskRunList().getFirst().getState().getHistories().stream().filter(history -> history.getState() == State.Type.PAUSED).count()).as("Task runs were: " + execution.getTaskRunList().toString()).isEqualTo(1L);
-            assertThat(execution.getTaskRunList().getFirst().getState().getHistories().stream().filter(history -> history.getState() == State.Type.RUNNING).count()).isEqualTo(2L);
+            assertThat(execution.getTaskRunList().getFirst().getState().getHistories().stream().filter(history -> history.getState() == State.Type.RUNNING).count()).isEqualTo(1L);
             assertThat(execution.getTaskRunList().getFirst().getState().getHistories().stream().filter(history -> history.getState() == State.Type.FAILED).count()).isEqualTo(1L);
             assertThat(execution.getTaskRunList()).hasSize(1);
         }
@@ -257,9 +261,9 @@ public class PauseTest {
             );
 
             assertThat(execution.getTaskRunList().getFirst().getState().getHistories().stream().filter(history -> history.getState() == State.Type.PAUSED).count()).as("Task runs were: " + execution.getTaskRunList().toString()).isEqualTo(1L);
-            assertThat(execution.getTaskRunList().getFirst().getState().getHistories().stream().filter(history -> history.getState() == State.Type.RUNNING).count()).isEqualTo(2L);
+            assertThat(execution.getTaskRunList().getFirst().getState().getHistories().stream().filter(history -> history.getState() == State.Type.RUNNING).count()).isEqualTo(1L);
             assertThat(execution.getTaskRunList().getFirst().getState().getHistories().stream().filter(history -> history.getState() == State.Type.WARNING).count()).isEqualTo(1L);
-            assertThat(execution.getTaskRunList()).hasSize(3);
+            assertThat(execution.getTaskRunList()).hasSize(2);
         }
 
         public void runEmptyTasks(TestRunnerUtils runnerUtils) throws Exception {
@@ -303,13 +307,12 @@ public class PauseTest {
             FileUpload fileUpload = httpDataFactory.createFileUpload(null, "files", "data", MediaType.TEXT_PLAIN, null, Charset.defaultCharset(), data.length);
             fileUpload.addContent(Unpooled.copiedBuffer(data), true);
             CompletedPart part3 = new NettyCompletedFileUpload(fileUpload);
-            Execution restarted = executionService.resume(
+            Map<String, Object> resumeOutputs = executionService.readInputs(
                 execution,
                 flow,
-                State.Type.RUNNING,
-                Flux.just(part1, part2, part3),
-                null
+                Flux.just(part1, part2, part3)
             ).block();
+            Execution restarted = executionService.resume(execution, flow, State.Type.RUNNING, resumeOutputs, Pause.Resumed.now());
 
             execution = runnerUtils.emitAndAwaitExecution(
                 e -> e.getId().equals(executionId) && e.getState().getCurrent() == State.Type.SUCCESS,
@@ -318,7 +321,7 @@ public class PauseTest {
 
             assertThat(execution.getState().getCurrent()).isEqualTo(State.Type.SUCCESS);
 
-            Map<String, Object> outputs = (Map<String, Object>) execution.findTaskRunsByTaskId("last").getFirst().getOutputs().get("values");
+            Map<String, Object> outputs = (Map<String, Object>) taskOutputService.getOutputs(execution.findTaskRunsByTaskId("last").getFirst()).get("values");
             assertThat(outputs.get("asked")).isEqualTo("restarted");
             assertThat(outputs.get("secret_pause")).isEqualTo("secret_value");
             assertThat((String) outputs.get("data")).startsWith("kestra://");
@@ -333,7 +336,7 @@ public class PauseTest {
 
             InputOutputValidationException e = assertThrows(
                 InputOutputValidationException.class,
-                () -> executionService.resume(execution, flow, State.Type.RUNNING, Mono.empty(), Pause.Resumed.now()).block()
+                () -> executionService.readInputs(execution, flow, Mono.empty()).block()
             );
 
             assertThat(e.getMessage()).contains(  "Missing required input:asked");
@@ -356,7 +359,7 @@ public class PauseTest {
 
             assertThat(execution.getState().getCurrent()).isEqualTo(State.Type.SUCCESS);
 
-            Map<String, Object> outputs = (Map<String, Object>) execution.findTaskRunsByTaskId("last").getFirst().getOutputs().get("values");
+            Map<String, Object> outputs = (Map<String, Object>) taskOutputService.getOutputs(execution.findTaskRunsByTaskId("last").getFirst()).get("values");
             assertThat(outputs.get("asked")).isEqualTo("MISSING");
         }
 

@@ -19,8 +19,8 @@ import io.kestra.core.models.tasks.Task;
 import io.kestra.core.runners.FlowableUtils;
 import io.kestra.core.runners.RunContext;
 import io.kestra.core.utils.GraphUtils;
+import io.kestra.core.utils.MapUtils;
 import io.kestra.core.utils.TruthUtils;
-import io.micronaut.core.annotation.Introspected;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotNull;
@@ -172,8 +172,8 @@ public class LoopUntil extends Task implements FlowableTask<LoopUntil.Output> {
             return false;
         }
 
-        Integer iterationCount = Optional.ofNullable(parentTaskRun.getOutputs())
-            .map(outputs -> (Integer) outputs.get("iterationCount"))
+        Integer iterationCount = Optional.ofNullable(runContext.currentOutput())
+            .map(out -> (Integer) out.get("iterationCount"))
             .orElse(0);
 
         Optional<Integer> maxIterations = runContext.render(this.getCheckFrequency().getMaxIterations()).as(Integer.class);
@@ -240,23 +240,21 @@ public class LoopUntil extends Task implements FlowableTask<LoopUntil.Output> {
 
     }
 
-    @SuppressWarnings("unchecked")
     @Override
     public LoopUntil.Output outputs(RunContext runContext) throws IllegalVariableEvaluationException {
-       Map<String, Object> outputs = (Map<String, Object>) runContext.getVariables().get("outputs");
-        if (outputs != null && outputs.get(this.id) != null) {
-            return Output.builder().iterationCount((Integer) ((Map<String, Object>) outputs.get(this.id)).get("iterationCount")).build();
+       Map<String, Object> outputs = runContext.currentOutput();
+        if (!MapUtils.isEmpty(outputs)) {
+            return Output.builder().iterationCount((Integer) outputs.get("iterationCount")).build();
         }
-        return LoopUntil.Output.builder()
+        return Output.builder()
             .iterationCount(INITIAL_LOOP_VALUE)
             .build();
     }
 
-    public LoopUntil.Output outputs(TaskRun parentTaskRun) throws IllegalVariableEvaluationException {
-        String value = parentTaskRun != null ?
-            String.valueOf(Optional.ofNullable(parentTaskRun.getOutputs())
+    public LoopUntil.Output outputs(Map<String, Object> previousOutput) throws IllegalVariableEvaluationException {
+        String value = String.valueOf(Optional.ofNullable(previousOutput)
                 .map(outputs -> outputs.get("iterationCount"))
-                .orElse("0")) : "0";
+                .orElse("0"));
 
         return Output.builder()
             .iterationCount(Integer.parseInt(value) + 1)
@@ -270,7 +268,6 @@ public class LoopUntil extends Task implements FlowableTask<LoopUntil.Output> {
     }
 
     @SuperBuilder(toBuilder = true)
-    @Introspected
     @Getter
     @NoArgsConstructor
     public static class CheckFrequency {

@@ -9,46 +9,46 @@ import io.kestra.core.junit.annotations.LoadFlows;
 import io.kestra.core.models.executions.Execution;
 import io.kestra.core.models.executions.LogEntry;
 import io.kestra.core.models.flows.State;
+import io.kestra.core.queues.DispatchQueueInterface;
 import io.kestra.core.queues.QueueException;
-import io.kestra.core.queues.QueueFactoryInterface;
-import io.kestra.core.queues.QueueInterface;
 import io.kestra.core.runners.TestRunnerUtils;
+import io.kestra.core.services.TaskOutputService;
 import io.kestra.core.utils.TestsUtils;
 import jakarta.inject.Inject;
-import jakarta.inject.Named;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeoutException;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
-import reactor.core.publisher.Flux;
 
 @KestraTest(startRunner = true)
 class VariablesTest {
     @Inject
-    @Named(QueueFactoryInterface.WORKERTASKLOG_NAMED)
-    QueueInterface<LogEntry> workerTaskLogQueue;
+    DispatchQueueInterface<LogEntry> workerTaskLogQueue;
 
     @Inject
     private TestRunnerUtils runnerUtils;
+
+    @Inject
+    private TaskOutputService taskOutputService;
 
     @Test
     @ExecuteFlow("flows/valids/variables.yaml")
     @EnabledIfEnvironmentVariable(named = "ENV_TEST1", matches = ".*")
     @EnabledIfEnvironmentVariable(named = "ENV_TEST2", matches = ".*")
-    void recursiveVars(Execution execution) {
+    void recursiveVars(Execution execution) throws io.kestra.core.exceptions.InternalException {
         assertThat(execution.getTaskRunList()).hasSize(3);
-        assertThat(execution.findTaskRunsByTaskId("variable").getFirst().getOutputs().get("value")).isEqualTo("1 > 2 > 3");
-        assertThat(execution.findTaskRunsByTaskId("env").getFirst().getOutputs().get("value")).isEqualTo("true Pass by env");
-        assertThat(execution.findTaskRunsByTaskId("global").getFirst().getOutputs().get("value")).isEqualTo("string 1 true 2");
+        assertThat(taskOutputService.getOutputs(execution.findTaskRunsByTaskId("variable").getFirst()).get("value")).isEqualTo("1 > 2 > 3");
+        assertThat(taskOutputService.getOutputs(execution.findTaskRunsByTaskId("env").getFirst()).get("value")).isEqualTo("true Pass by env");
+        assertThat(taskOutputService.getOutputs(execution.findTaskRunsByTaskId("global").getFirst()).get("value")).isEqualTo("string 1 true 2");
     }
 
     @Test
     @LoadFlows({"flows/valids/variables-invalid.yaml"})
     void invalidVars() throws TimeoutException, QueueException {
         List<LogEntry> logs = new CopyOnWriteArrayList<>();
-        Flux<LogEntry> receive = TestsUtils.receive(workerTaskLogQueue, either -> logs.add(either.getLeft()));
+        workerTaskLogQueue.addListener(logs::add);
 
         Execution execution = runnerUtils.runOne(MAIN_TENANT, "io.kestra.tests", "variables-invalid");
 
@@ -59,7 +59,6 @@ class VariablesTest {
             Objects.equals(logEntry.getTaskRunId(), execution.getTaskRunList().get(1).getId()) &&
                 logEntry.getMessage().contains("Unable to find `inputs` used in the expression `{{inputs.invalid}}`")
         );
-        receive.blockLast();
         assertThat(matchingLog).isNotNull();
         assertThat(execution.getState().getCurrent()).isEqualTo(State.Type.FAILED);
     }

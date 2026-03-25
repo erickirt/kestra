@@ -2,6 +2,7 @@ package io.kestra.webserver.controllers.api;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.google.common.collect.ImmutableMap;
+import io.kestra.core.exceptions.InternalException;
 import io.kestra.core.junit.annotations.ExecuteFlow;
 import io.kestra.core.junit.annotations.FlakyTest;
 import io.kestra.core.junit.annotations.KestraTest;
@@ -18,16 +19,12 @@ import io.kestra.core.models.flows.State;
 import io.kestra.core.models.flows.State.Type;
 import io.kestra.core.models.storage.FileMetas;
 import io.kestra.core.models.tasks.common.EncryptedString;
-import io.kestra.core.queues.QueueException;
-import io.kestra.core.queues.QueueFactoryInterface;
-import io.kestra.core.queues.QueueInterface;
+import io.kestra.core.queues.*;
 import io.kestra.core.repositories.ExecutionRepositoryInterface;
 import io.kestra.core.repositories.FlowRepositoryInterface;
-import io.kestra.core.runners.FlowInputOutput;
-import io.kestra.core.runners.InputsTest;
-import io.kestra.core.runners.LocalPath;
-import io.kestra.core.runners.TestRunnerUtils;
+import io.kestra.core.runners.*;
 import io.kestra.core.serializers.JacksonMapper;
+import io.kestra.core.services.TaskOutputService;
 import io.kestra.core.storages.Namespace;
 import io.kestra.core.storages.NamespaceFactory;
 import io.kestra.core.storages.StorageInterface;
@@ -35,8 +32,8 @@ import io.kestra.core.tenant.TenantService;
 import io.kestra.core.utils.Await;
 import io.kestra.core.utils.IdUtils;
 import io.kestra.core.utils.TestsUtils;
-import io.kestra.jdbc.JdbcTestUtils;
 import io.kestra.plugin.core.trigger.Webhook;
+import io.kestra.webserver.models.api.ApiAsyncEvent;
 import io.kestra.plugin.core.trigger.WebhookResponse;
 import io.kestra.webserver.controllers.api.ExecutionController.StateRequest;
 import io.kestra.webserver.responses.BulkErrorResponse;
@@ -55,9 +52,7 @@ import io.micronaut.reactor.http.client.ReactorHttpClient;
 import io.micronaut.reactor.http.client.ReactorSseClient;
 import io.micronaut.test.annotation.MockBean;
 import jakarta.inject.Inject;
-import jakarta.inject.Named;
 import lombok.extern.slf4j.Slf4j;
-import org.awaitility.Awaitility;
 import org.hamcrest.Matcher;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -88,11 +83,11 @@ import static io.micronaut.http.HttpRequest.*;
 import static io.micronaut.http.HttpRequest.DELETE;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.fail;
+import static org.awaitility.Awaitility.await;
 import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.greaterThan;
 import static org.hamcrest.Matchers.hasSize;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -104,12 +99,10 @@ class ExecutionControllerRunnerTest {
     public static final String ENCODED_URL_LABEL_VALUE = URL_LABEL_VALUE.replace("/", URLEncoder.encode("/", StandardCharsets.UTF_8));
 
     @Inject
-    @Named(QueueFactoryInterface.EXECUTION_NAMED)
-    protected QueueInterface<Execution> executionQueue;
+    protected BroadcastQueueInterface<FollowExecutionEvent> executionEventQueue;
 
     @Inject
-    @Named(QueueFactoryInterface.KILL_NAMED)
-    protected QueueInterface<ExecutionKilled> killQueue;
+    protected BroadcastQueueInterface<ExecutionKilled> killQueue;
 
     @Inject
     FlowRepositoryInterface flowRepositoryInterface;
@@ -127,9 +120,6 @@ class ExecutionControllerRunnerTest {
 
     @Inject
     private FlowInputOutput flowIO;
-
-    @Inject
-    private JdbcTestUtils jdbcTestUtils;
 
     @Inject
     protected TestRunnerUtils runnerUtils;
@@ -152,13 +142,15 @@ class ExecutionControllerRunnerTest {
         return mock(TenantValidationFilter.class);
     }
 
+    @Inject
+    private TaskOutputService taskOutputService;
+
     public static final String TESTS_FLOW_NS = "io.kestra.tests";
     public static final String TENANT_ID = "main";
 
     public static Map<String, Object> inputs = ImmutableMap.<String, Object>builder()
         .put("failed", "NO")
         .put("string", "myString")
-        .put("enum", "ENUM_VALUE")
         .put("int", "42")
         .put("float", "42.42")
         .put("instant", "2019-10-06T18:27:49Z")
@@ -290,6 +282,7 @@ class ExecutionControllerRunnerTest {
         String tenantId = "getexecution";
         when(tenantService.resolveTenant()).thenReturn(tenantId);
         Execution result = triggerExecutionInputsFlowExecution(tenantId, false);
+        awaitExecution(result.getId());
 
         // Get the triggered execution by execution id
         Execution foundExecution = client.retrieve(
@@ -362,9 +355,9 @@ class ExecutionControllerRunnerTest {
     }
 
     @Test
-    @LoadFlows({"flows/valids/each-sequential-nested.yaml"})
+    @LoadFlows({"flows/valids/foreach-nested.yaml"})
     void evalTaskRunExpression() throws TimeoutException, QueueException {
-        Execution execution = runnerUtils.runOne(TENANT_ID, TESTS_FLOW_NS, "each-sequential-nested");
+        Execution execution = runnerUtils.runOne(TENANT_ID, TESTS_FLOW_NS, "foreach-nested");
 
         ExecutionController.EvalResult result = this.evalTaskRunExpression(execution, "my simple string", 0);
         assertThat(result.getResult()).isEqualTo("my simple string");
@@ -372,10 +365,10 @@ class ExecutionControllerRunnerTest {
         result = this.evalTaskRunExpression(execution, "{{ taskrun.id }}", 0);
         assertThat(result.getResult()).isEqualTo(execution.getTaskRunList().getFirst().getId());
 
-        result = this.evalTaskRunExpression(execution, "{{ outputs['1-1_return'][taskrun.value].value }}", 21);
-        assertThat(result.getResult()).contains("1-1_return");
+        result = this.evalTaskRunExpression(execution, "{{ outputs['p1'][taskrun.value].d1.value }}", 1);
+        assertThat(result.getResult()).contains("l1-d1");
 
-        result = this.evalTaskRunExpression(execution, "{{ missing }}", 21);
+        result = this.evalTaskRunExpression(execution, "{{ missing }}", 1);
         assertThat(result.getResult()).isNull();
         assertThat(result.getError()).contains("Unable to find `missing` used in the expression `{{ missing }}` at line 1");
         assertThat(result.getStackTrace()).contains("Unable to find `missing` used in the expression `{{ missing }}` at line 1");
@@ -412,15 +405,16 @@ class ExecutionControllerRunnerTest {
 
     @Test
     @LoadFlows(value = {"flows/valids/webhook-plugin.yaml"}, tenantId = "triggerencrypted")
-    void triggerEncrypted() throws InterruptedException {
+    void triggerEncrypted() throws InterruptedException, InternalException {
         String tenantId = "triggerencrypted";
         when(tenantService.resolveTenant()).thenReturn(tenantId);
 
         CountDownLatch queueCount = new CountDownLatch(1);
-
-        Flux<Execution> receive = TestsUtils.receive(executionQueue, execution -> {
-            if (execution.getLeft().getFlowId().equals("webhook-plugin") && execution.getLeft().getState().isTerminated()) {
+        AtomicReference<String> executionId = new AtomicReference<>();
+        executionEventQueue.addListener( execution -> {
+            if (execution.flowId().equals("webhook-plugin") && execution.eventType() == ExecutionEventType.TERMINATED) {
                 queueCount.countDown();
+                executionId.set(execution.executionId());
             }
         });
 
@@ -434,16 +428,18 @@ class ExecutionControllerRunnerTest {
 
         assertThat((Object)response.getStatus()).isEqualTo(HttpStatus.OK);
 
-        queueCount.await(180, TimeUnit.SECONDS);
-        var execution = Objects.requireNonNull(receive.blockLast());
+        assertTrue(queueCount.await(10, TimeUnit.SECONDS));
+        var execution = awaitExecution(executionId.get());
 
         // the output is automatically decrypted so the return has the decrypted value of the hello task output
-        TaskRun returnTask = execution.findTaskRunsByTaskId("return").getFirst();
-        assertThat(Objects.requireNonNull(returnTask.getOutputs()).get("value")).isEqualTo("Hello World");
+        TaskRun returnTask = execution.findTaskRunsByTaskId("return").getFirst().toBuilder().tenantId(tenantId).build(); // API didn't include the tenantId in the response
+        Map<String, Object> outputs = taskOutputService.getOutputs(returnTask);
+        assertThat(Objects.requireNonNull(outputs).get("value")).isEqualTo("Hello World");
 
         // the output of a trigger is also decrypted automatically
-        TaskRun outTask = execution.findTaskRunsByTaskId("out").getFirst();
-        assertThat(((Map<String, String>)Objects.requireNonNull(outTask.getOutputs()).get("values")).get("encrypted")).isEqualTo("super-secret");
+        TaskRun outTask = execution.findTaskRunsByTaskId("out").getFirst().toBuilder().tenantId(tenantId).build(); // API didn't include the tenantId in the response
+        outputs = taskOutputService.getOutputs(outTask);
+        assertThat(((Map<String, String>)Objects.requireNonNull(outputs).get("values")).get("encrypted")).isEqualTo("super-secret");
     }
 
     @Test
@@ -465,7 +461,7 @@ class ExecutionControllerRunnerTest {
 
         assertThat(e.getStatus().getCode()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY.getCode());
         assertThat(e.getResponse().getBody(String.class).isPresent()).isTrue();
-        assertThat(e.getResponse().getBody(String.class).get()).contains("No task found");
+        assertThat(e.getResponse().getBody(String.class).get()).contains("Task run id 'unknownTaskId' not found in execution");
     }
 
     @Test
@@ -484,9 +480,9 @@ class ExecutionControllerRunnerTest {
             Execution.class
         ));
 
-        assertThat(e.getStatus().getCode()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY.getCode());
+        assertThat(e.getStatus().getCode()).isEqualTo(HttpStatus.CONFLICT.getCode());
         assertThat(e.getResponse().getBody(String.class).isPresent()).isTrue();
-        assertThat(e.getResponse().getBody(String.class).get()).contains("No task found to restart");
+        assertThat(e.getResponse().getBody(String.class).get()).contains("Execution must be failed to be restarted, current state is 'SUCCESS'");
     }
 
     @Test
@@ -507,33 +503,27 @@ class ExecutionControllerRunnerTest {
         // Run child execution starting from a specific task and wait until it finishes
         Thread.sleep(100);
 
-                Execution createdChidExec = client.toBlocking().retrieve(
-                    HttpRequest
-                        .POST("/api/v1/" + tenantId + "/executions/" + parentExecution.getId() + "/replay?taskRunId=" + parentExecution.findTaskRunByTaskIdAndValue(referenceTaskId, List.of()).getId(), ImmutableMap.of()),
-                    Execution.class
-                );
+        Execution createdChildExec = client.toBlocking().retrieve(
+            HttpRequest
+                .POST("/api/v1/" + tenantId + "/executions/" + parentExecution.getId() + "/replay?taskRunId=" + parentExecution.findTaskRunByTaskIdAndValue(referenceTaskId, List.of()).getId(), ImmutableMap.of()),
+            Execution.class
+        );
+        assertThat(createdChildExec).isNotNull();
 
-        assertThat(createdChidExec).isNotNull();
-        assertThat(createdChidExec.getParentId()).isEqualTo(parentExecution.getId());
-        assertThat(createdChidExec.getTaskRunList().size()).isEqualTo(4);
-        assertThat(createdChidExec.getState().getCurrent()).isEqualTo(State.Type.RESTARTED);
-
-        IntStream
-            .range(0, 3)
-            .mapToObj(value -> createdChidExec.getTaskRunList().get(value))
-            .forEach(taskRun -> assertThat(taskRun.getState().getCurrent()).isEqualTo(State.Type.SUCCESS));
-
-        assertThat(createdChidExec.getTaskRunList().get(3).getState().getCurrent()).isEqualTo(State.Type.RESTARTED);
-        assertThat(createdChidExec.getTaskRunList().get(3).getAttempts().size()).isEqualTo(1);
         Execution finishedChildExecution = runnerUtils.awaitChildExecution(
             flow.get(),
             parentExecution,
-            createdChidExec.withTenantId(tenantId), // the endpoint didn't return the tenantId
             Duration.ofSeconds(15));
 
         assertThat(finishedChildExecution).isNotNull();
         assertThat(finishedChildExecution.getParentId()).isEqualTo(parentExecution.getId());
         assertThat(finishedChildExecution.getTaskRunList().size()).isEqualTo(5);
+        assertThat(finishedChildExecution.getState().getHistories().stream().anyMatch(it -> it.getState() == Type.RESTARTED)).isTrue();
+
+        IntStream
+            .range(0, 3)
+            .mapToObj(value -> finishedChildExecution.getTaskRunList().get(value))
+            .forEach(taskRun -> assertThat(taskRun.getState().getCurrent()).isEqualTo(State.Type.SUCCESS));
 
         finishedChildExecution
             .getTaskRunList()
@@ -544,7 +534,7 @@ class ExecutionControllerRunnerTest {
 
     @Test
     @LoadFlows({"flows/valids/condition_with_input.yaml"})
-    void restartExecutionWithNewInputs() throws Exception {
+    void replayExecutionWithNewInputs() throws Exception {
         final String flowId = "condition_with_input";
 
         // Run execution until it ends
@@ -564,20 +554,18 @@ class ExecutionControllerRunnerTest {
             .addPart("condition", "success")
             .build();
 
-        Execution replay = client.toBlocking().retrieve(
+        ApiAsyncEvent replay = client.toBlocking().retrieve(
             HttpRequest
                 .POST("/api/v1/main/executions/" + parentExecution.getId() + "/replay-with-inputs", multipartBody)
                 .contentType(MediaType.MULTIPART_FORM_DATA_TYPE),
-            Execution.class
+            ApiAsyncEvent.class
         );
 
         assertThat(replay).isNotNull();
-        assertThat(replay.getParentId()).isEqualTo(parentExecution.getId());
-        assertThat(replay.getState().getCurrent()).isEqualTo(Type.CREATED);
+
         Execution finishedChildExecution = runnerUtils.awaitChildExecution(
             flow.get(),
             parentExecution,
-            replay.withTenantId(TENANT_ID), // the endpoint didn't return the tenantId
             Duration.ofSeconds(15));
 
         assertThat(finishedChildExecution).isNotNull();
@@ -593,7 +581,7 @@ class ExecutionControllerRunnerTest {
 
     @Test
     @LoadFlows({"flows/valids/condition_with_input.yaml"})
-    void restartExecutionFromTaskIdWithInputs() throws Exception {
+    void replayExecutionFromTaskIdWithInputs() throws Exception {
         final String flowId = "condition_with_input";
         final String referenceTaskId = "fail";
 
@@ -614,26 +602,24 @@ class ExecutionControllerRunnerTest {
             .addPart("condition", "success")
             .build();
 
-        Execution replay = client.toBlocking().retrieve(
+        ApiAsyncEvent replay = client.toBlocking().retrieve(
             HttpRequest
                 .POST("/api/v1/main/executions/" + parentExecution.getId() + "/replay-with-inputs?taskRunId=" + parentExecution.findTaskRunByTaskIdAndValue(referenceTaskId, List.of()).getId(), multipartBody)
                 .contentType(MediaType.MULTIPART_FORM_DATA_TYPE),
-            Execution.class
+            ApiAsyncEvent.class
         );
 
         assertThat(replay).isNotNull();
-        assertThat(replay.getParentId()).isEqualTo(parentExecution.getId());
-        assertThat(replay.getTaskRunList().size()).isEqualTo(2);
-        assertThat(replay.getState().getCurrent()).isEqualTo(State.Type.RESTARTED);
+
         Execution finishedChildExecution = runnerUtils.awaitChildExecution(
             flow.get(),
             parentExecution,
-            replay.withTenantId(TENANT_ID), // the endpoint didn't return the tenantId
             Duration.ofSeconds(15));
 
         assertThat(finishedChildExecution).isNotNull();
         assertThat(finishedChildExecution.getParentId()).isEqualTo(parentExecution.getId());
         assertThat(finishedChildExecution.getTaskRunList().size()).isEqualTo(2);
+        assertThat(finishedChildExecution.getState().getHistories().stream().anyMatch(it -> it.getState() == Type.RESTARTED)).isTrue();
 
         finishedChildExecution
             .getTaskRunList()
@@ -658,22 +644,24 @@ class ExecutionControllerRunnerTest {
         // Run child execution starting from a specific task and wait until it finishes
         Thread.sleep(100);
 
-        Execution createdChidExec = client.toBlocking().retrieve(
+        ApiAsyncEvent createdChildExec = client.toBlocking().retrieve(
             HttpRequest
                 .POST("/api/v1/main/executions/" + parentExecution.getId() + "/replay?taskRunId=" + parentExecution.findTaskRunByTaskIdAndValue(referenceTaskId, List.of()).getId(), ImmutableMap.of()),
-            Execution.class
+            ApiAsyncEvent.class
         );
 
-        assertThat(createdChidExec.getState().getCurrent()).isEqualTo(State.Type.RESTARTED);
-        assertThat(createdChidExec.getState().getHistories()).hasSize(4);
-        assertThat(createdChidExec.getTaskRunList()).hasSize(20);
+        assertThat(createdChildExec).isNotNull();
 
-        assertThat(createdChidExec.getId()).isNotEqualTo(parentExecution.getId());
-        runnerUtils.awaitChildExecution(
+        Execution restarted = runnerUtils.awaitChildExecution(
             flow.get(),
             parentExecution,
-            createdChidExec.withTenantId(TENANT_ID),
             Duration.ofSeconds(30));
+
+        assertThat(restarted.getState().getCurrent()).isEqualTo(Type.SUCCESS);
+        assertThat(restarted.getState().getHistories()).hasSize(6);
+        assertThat(restarted.getState().getHistories().stream().anyMatch(it -> it.getState() == Type.RESTARTED)).isTrue();
+        assertThat(restarted.getTaskRunList()).hasSize(20);
+        assertThat(restarted.getId()).isNotEqualTo(parentExecution.getId());
     }
 
     @Test
@@ -692,31 +680,17 @@ class ExecutionControllerRunnerTest {
         assertThat(flow.isPresent()).isTrue();
 
         // Restart execution and wait until it finishes
-        Execution restartedExec = client.toBlocking().retrieve(
+        ApiAsyncEvent restartedExec = client.toBlocking().retrieve(
             HttpRequest
                 .POST("/api/v1/main/executions/" + firstExecution.getId() + "/restart", ImmutableMap.of()),
-            Execution.class
+            ApiAsyncEvent.class
         );
 
         assertThat(restartedExec).isNotNull();
-        assertThat(restartedExec.getId()).isEqualTo(firstExecution.getId());
-        assertThat(restartedExec.getParentId()).isNull();
-        assertThat(restartedExec.getTaskRunList().size()).isEqualTo(3);
-        assertThat(restartedExec.getState().getCurrent()).isEqualTo(State.Type.RESTARTED);
-
-        IntStream
-            .range(0, 2)
-            .mapToObj(value -> restartedExec.getTaskRunList().get(value)).forEach(taskRun -> {
-                assertThat(taskRun.getState().getCurrent()).isEqualTo(State.Type.SUCCESS);
-                assertThat(taskRun.getAttempts().size()).isEqualTo(1);
-
-                assertThat(restartedExec.getTaskRunList().get(2).getState().getCurrent()).isEqualTo(State.Type.RESTARTED);
-                assertThat(restartedExec.getTaskRunList().get(2).getAttempts().size()).isEqualTo(1);
-            });
 
         Execution finishedRestartedExecution = runnerUtils.awaitExecution(
             execution -> execution.getTaskRunList().size() == 4 && execution.getState().isTerminated(),
-            restartedExec.withTenantId(TENANT_ID), // the endpoint didn't return the tenantId
+            firstExecution.withTenantId(TENANT_ID), // the endpoint didn't return the tenantId
             Duration.ofSeconds(15)
         );
 
@@ -724,76 +698,20 @@ class ExecutionControllerRunnerTest {
         assertThat(finishedRestartedExecution.getId()).isEqualTo(firstExecution.getId());
         assertThat(finishedRestartedExecution.getParentId()).isNull();
         assertThat(finishedRestartedExecution.getTaskRunList().size()).isEqualTo(4);
+        assertThat(finishedRestartedExecution.getState().getHistories().stream().anyMatch(it -> it.getState() == Type.RESTARTED)).isTrue();
+
+        IntStream
+            .range(0, 2)
+            .mapToObj(value -> finishedRestartedExecution.getTaskRunList().get(value)).forEach(taskRun -> {
+                assertThat(taskRun.getState().getCurrent()).isEqualTo(State.Type.SUCCESS);
+
+                assertThat(finishedRestartedExecution.getTaskRunList().get(2).getState().getHistories().stream().anyMatch(it -> it.getState() ==  Type.RESTARTED)).isTrue();
+            });
 
         assertThat(finishedRestartedExecution.getTaskRunList().getFirst().getAttempts().size()).isEqualTo(1);
         assertThat(finishedRestartedExecution.getTaskRunList().get(1).getAttempts().size()).isEqualTo(1);
         assertThat(finishedRestartedExecution.getTaskRunList().get(2).getAttempts().size()).isEqualTo(2);
         assertThat(finishedRestartedExecution.getTaskRunList().get(3).getAttempts().size()).isEqualTo(1);
-
-        finishedRestartedExecution
-            .getTaskRunList()
-            .stream()
-            .map(TaskRun::getState)
-            .forEach(state -> assertThat(state.getCurrent()).isEqualTo(State.Type.SUCCESS));
-    }
-
-    @Test
-    @LoadFlows({"flows/valids/restart_pause_last_failed.yaml"})
-    void restartExecutionFromLastFailedWithPauseExecution() throws TimeoutException, QueueException{
-        final String flowId = "restart_pause_last_failed";
-
-        // Run execution until it ends
-        Execution firstExecution = runnerUtils.runOne(TENANT_ID, TESTS_FLOW_NS, flowId, null, (BiFunction<FlowInterface, Execution, Map<String, Object>>) null);
-
-        assertThat(firstExecution.getTaskRunList().get(2).getState().getCurrent()).isEqualTo(State.Type.FAILED);
-        assertThat(firstExecution.getState().getCurrent()).isEqualTo(State.Type.FAILED);
-
-        // Update task's command to make second execution successful
-        Optional<Flow> flow = flowRepositoryInterface.findById(TENANT_ID, TESTS_FLOW_NS, flowId);
-        assertThat(flow.isPresent()).isTrue();
-
-        // Restart execution and wait until it finishes
-        Execution restartedExec = client.toBlocking().retrieve(
-            HttpRequest
-                .POST("/api/v1/main/executions/" + firstExecution.getId() + "/restart", ImmutableMap.of()),
-            Execution.class
-        );
-
-        assertThat(restartedExec).isNotNull();
-        assertThat(restartedExec.getId()).isEqualTo(firstExecution.getId());
-        assertThat(restartedExec.getParentId()).isNull();
-        assertThat(restartedExec.getTaskRunList().size()).isEqualTo(4);
-        assertThat(restartedExec.getState().getCurrent()).isEqualTo(State.Type.RESTARTED);
-
-        IntStream
-            .range(0, 2)
-            .mapToObj(value -> restartedExec.getTaskRunList().get(value)).forEach(taskRun -> {
-                assertThat(taskRun.getState().getCurrent()).isEqualTo(State.Type.SUCCESS);
-                assertThat(taskRun.getAttempts().size()).isEqualTo(1);
-
-                assertThat(restartedExec.getTaskRunList().get(2).getState().getCurrent()).isEqualTo(State.Type.RUNNING);
-                assertThat(restartedExec.getTaskRunList().get(3).getState().getCurrent()).isEqualTo(State.Type.RESTARTED);
-                assertThat(restartedExec.getTaskRunList().get(2).getAttempts()).isNotNull();
-                assertThat(restartedExec.getTaskRunList().get(3).getAttempts().size()).isEqualTo(1);
-            });
-
-        Execution finishedRestartedExecution = runnerUtils.awaitExecution(
-            execution -> execution.getTaskRunList().size() == 5 && execution.getState().isTerminated(),
-            firstExecution,
-            Duration.ofSeconds(15)
-        );
-
-        assertThat(finishedRestartedExecution).isNotNull();
-        assertThat(finishedRestartedExecution.getId()).isEqualTo(firstExecution.getId());
-        assertThat(finishedRestartedExecution.getParentId()).isNull();
-        assertThat(finishedRestartedExecution.getTaskRunList().size()).isEqualTo(5);
-
-        assertThat(finishedRestartedExecution.getTaskRunList().getFirst().getAttempts().size()).isEqualTo(1);
-        assertThat(finishedRestartedExecution.getTaskRunList().get(1).getAttempts().size()).isEqualTo(1);
-        assertThat(finishedRestartedExecution.getTaskRunList().get(2).getAttempts()).isNotNull();
-        assertThat(finishedRestartedExecution.getTaskRunList().get(2).getState().getHistories().stream().filter(state -> state.getState() == State.Type.PAUSED).count()).isEqualTo(1L);
-        assertThat(finishedRestartedExecution.getTaskRunList().get(3).getAttempts().size()).isEqualTo(2);
-        assertThat(finishedRestartedExecution.getTaskRunList().get(4).getAttempts().size()).isEqualTo(1);
 
         finishedRestartedExecution
             .getTaskRunList()
@@ -862,7 +780,6 @@ class ExecutionControllerRunnerTest {
         Map<String, Object> latin1FileInputs = ImmutableMap.<String, Object>builder()
             .put("failed", "NO")
             .put("string", "myString")
-            .put("enum", "ENUM_VALUE")
             .put("int", "42")
             .put("float", "42.42")
             .put("instant", "2019-10-06T18:27:49Z")
@@ -1083,7 +1000,7 @@ class ExecutionControllerRunnerTest {
     @Test
     @LoadFlows({"flows/valids/pause-test.yaml"})
     @SuppressWarnings("unchecked")
-    void resumeExecutionPaused() throws TimeoutException, QueueException {
+    void resumeExecutionPaused() throws QueueException, InternalException {
         // Run execution until it is paused
         Execution pausedExecution = runnerUtils.runOneUntilPaused(TENANT_ID, TESTS_FLOW_NS, "pause-test");
         assertThat(pausedExecution.getState().isPaused()).isTrue();
@@ -1095,13 +1012,14 @@ class ExecutionControllerRunnerTest {
 
         // check that the execution is no more paused
         Execution execution = awaitExecution(pausedExecution.getId(), exec -> !exec.getState().isPaused());
-        assertThat((Map<String, Object>) execution.findTaskRunsByTaskId("pause").getFirst().getOutputs().get("resumed")).containsKey("on");
+        Map<String, Object> outputs = taskOutputService.getOutputs(execution.findTaskRunsByTaskId("pause").getFirst().toBuilder().tenantId(TENANT_ID).build()); // API didn't send back the tenant id
+        assertThat((Map<String, Object>) outputs.get("resumed")).containsKey("on");
     }
 
     @Test
     @LoadFlows({"flows/valids/resume-validate.yaml"})
     @SuppressWarnings("unchecked")
-    void resumeValidateExecutionPaused() throws TimeoutException, QueueException {
+    void resumeValidateExecutionPaused() throws QueueException, InternalException {
         // Run execution until it is paused
         Execution pausedExecution = runnerUtils.runOneUntilPaused(TENANT_ID, TESTS_FLOW_NS, "resume-validate");
         assertThat(pausedExecution.getState().isPaused()).isTrue();
@@ -1118,13 +1036,14 @@ class ExecutionControllerRunnerTest {
 
         // check that the execution is no more paused
         Execution execution = awaitExecution(pausedExecution.getId(), exec -> !exec.getState().isPaused());
-        assertThat((Map<String, Object>) execution.findTaskRunsByTaskId("pause").getFirst().getOutputs().get("resumed")).containsKey("on");
+        Map<String, Object> outputs = taskOutputService.getOutputs(execution.findTaskRunsByTaskId("pause").getFirst().toBuilder().tenantId(TENANT_ID).build()); // API didn't send back the tenant id
+        assertThat((Map<String, Object>) outputs.get("resumed")).containsKey("on");
     }
 
     @SuppressWarnings("unchecked")
     @Test
     @LoadFlows({"flows/valids/pause_on_resume.yaml"})
-    void resumeExecutionPausedWithInputs() throws TimeoutException, QueueException {
+    void resumeExecutionPausedWithInputs() throws TimeoutException, QueueException, InternalException {
         // Run execution until it is paused
         Execution pausedExecution = runnerUtils.runOneUntilPaused(TENANT_ID, TESTS_FLOW_NS, "pause_on_resume");
         assertThat(pausedExecution.getState().isPaused()).isTrue();
@@ -1149,7 +1068,8 @@ class ExecutionControllerRunnerTest {
         // check that the execution is no more paused
         Execution execution = awaitExecution(pausedExecution.getId(), exec -> !exec.getState().isPaused());
 
-        Map<String, Object> inputs = (Map<String, Object>) execution.findTaskRunsByTaskId("pause").getFirst().getOutputs().get("onResume");
+        Map<String, Object> outputs = taskOutputService.getOutputs(execution.findTaskRunsByTaskId("pause").getFirst().toBuilder().tenantId(TENANT_ID).build()); // API didn't send back the tenant id'
+        Map<String, Object> inputs = (Map<String, Object>) outputs.get("onResume");
         Map<String, String> secretInputs = (Map<String, String>) inputs.get("secret_pause");
         assertThat(inputs.get("asked")).isEqualTo("myString");
         assertThat(secretInputs.get("type")).isEqualTo(EncryptedString.TYPE);
@@ -1253,12 +1173,19 @@ class ExecutionControllerRunnerTest {
         assertThat(execution.getState().getCurrent()).isEqualTo(State.Type.SUCCESS);
 
         // replay executions
-        Execution changedStatus = client.toBlocking().retrieve(
+        ApiAsyncEvent eventId = client.toBlocking().retrieve(
             HttpRequest.POST(
                 "/api/v1/%s/executions/".formatted(tenantId) + execution.getId() + "/change-status?status=WARNING",
                 null
             ),
-            Execution.class
+            ApiAsyncEvent.class
+        );
+        assertThat(eventId).isNotNull();
+
+        Execution changedStatus = runnerUtils.awaitExecution(
+            e -> e.getId().equals(execution.getId()) && e.getState().getCurrent() == Type.WARNING,
+            execution,
+            Duration.ofSeconds(10)
         );
         assertThat(changedStatus.getState().getCurrent()).isEqualTo(State.Type.WARNING);
     }
@@ -1289,8 +1216,9 @@ class ExecutionControllerRunnerTest {
         );
         assertThat(changeStatus.getCount()).isEqualTo(2);
 
-        executions = client.toBlocking().retrieve(
-            GET("/api/v1/%s/executions/search".formatted(tenantId)), Argument.of(PagedResults.class, Execution.class)
+        executions = await().atMost(Duration.ofSeconds(10)).until(
+            () -> client.toBlocking().retrieve(GET("/api/v1/%s/executions/search".formatted(tenantId)), Argument.of(PagedResults.class, Execution.class)),
+            it -> it.getResults().stream().allMatch(e -> ((Execution)e).getState().getCurrent().equals(State.Type.WARNING))
         );
         assertThat(executions.getResults().getFirst().getState().getCurrent()).isEqualTo(State.Type.WARNING);
         assertThat(executions.getResults().get(1).getState().getCurrent()).isEqualTo(State.Type.WARNING);
@@ -1312,15 +1240,16 @@ class ExecutionControllerRunnerTest {
         );
         assertThat(executions.getTotal()).isEqualTo(2L);
 
-        // change status of  executions
+        // change status of executions
         BulkResponse changeStatus = client.toBlocking().retrieve(
             HttpRequest.POST("/api/v1/%s/executions/change-status/by-query?namespace=io.kestra.tests&newStatus=WARNING".formatted(tenantId), null),
             BulkResponse.class
         );
         assertThat(changeStatus.getCount()).isEqualTo(2);
 
-        executions = client.toBlocking().retrieve(
-            GET("/api/v1/%s/executions/search".formatted(tenantId)), Argument.of(PagedResults.class, Execution.class)
+        executions = await().atMost(Duration.ofSeconds(10)).until(
+            () -> client.toBlocking().retrieve(GET("/api/v1/%s/executions/search".formatted(tenantId)), Argument.of(PagedResults.class, Execution.class)),
+            it -> it.getResults().stream().allMatch(e -> ((Execution)e).getState().getCurrent().equals(State.Type.WARNING))
         );
         assertThat(executions.getResults().getFirst().getState().getCurrent()).isEqualTo(State.Type.WARNING);
         assertThat(executions.getResults().get(1).getState().getCurrent()).isEqualTo(State.Type.WARNING);;
@@ -1397,19 +1326,23 @@ class ExecutionControllerRunnerTest {
     @LoadFlowsWithTenant({"flows/valids/minimal.yaml"})
     void replayExecution(String tenantId) throws TimeoutException, QueueException {
         when(tenantService.resolveTenant()).thenReturn(tenantId);
+        Flow flow = flowRepositoryInterface.findById(tenantId, TESTS_FLOW_NS, "minimal").orElseThrow();
         Execution execution = runnerUtils.runOne(tenantId, TESTS_FLOW_NS, "minimal");
 
         assertThat(execution.getState().isTerminated()).isTrue();
 
         // replay execution
-        Execution replay = client.toBlocking().retrieve(
+        ApiAsyncEvent eventId  = client.toBlocking().retrieve(
             HttpRequest.POST(
                 "/api/v1/%s/executions/".formatted(tenantId) + execution.getId() + "/replay",
                 null
             ),
-            Execution.class
+            ApiAsyncEvent.class
         );
-        assertThat(replay.getState().getCurrent()).isEqualTo(State.Type.CREATED);
+        assertThat(eventId).isNotNull();
+
+        Execution replay = runnerUtils.awaitChildExecution(flow, execution, Duration.ofSeconds(10));
+        assertThat(replay.getState().getCurrent()).isEqualTo(Type.SUCCESS);
         assertThat(replay.getOriginalId()).isEqualTo(execution.getId());
         assertThat(replay.getLabels()).contains(new Label(Label.REPLAY, "true"));
 
@@ -1446,8 +1379,9 @@ class ExecutionControllerRunnerTest {
         );
         assertThat(replayResponse.getCount()).isEqualTo(2);
 
-        executions = client.toBlocking().retrieve(
-            GET("/api/v1/%s/executions/search".formatted(tenantId)), PagedResults.class
+        executions = await().atMost(Duration.ofSeconds(10)).until(
+            () -> client.toBlocking().retrieve(GET("/api/v1/%s/executions/search".formatted(tenantId)), PagedResults.class),
+            it -> it.getTotal() == 4L
         );
         assertThat(executions.getTotal()).isEqualTo(4L);
     }
@@ -1462,7 +1396,7 @@ class ExecutionControllerRunnerTest {
         assertThat(execution1.getState().isTerminated()).isTrue();
         assertThat(execution2.getState().isTerminated()).isTrue();
 
-        PagedResults<?> executions = client.toBlocking().retrieve(
+        PagedResults<Execution> executions = client.toBlocking().retrieve(
             GET("/api/v1/%s/executions/search".formatted(tenantId)), PagedResults.class
         );
         assertThat(executions.getTotal()).isEqualTo(2L);
@@ -1474,10 +1408,13 @@ class ExecutionControllerRunnerTest {
         );
         assertThat(resumeResponse.getCount()).isEqualTo(2);
 
-        executions = client.toBlocking().retrieve(
-            GET("/api/v1/%s/executions/search".formatted(tenantId)), PagedResults.class
+        executions = await().atMost(Duration.ofSeconds(10)).until(
+            () -> client.toBlocking().retrieve(GET("/api/v1/%s/executions/search".formatted(tenantId)), Argument.of(PagedResults.class, Execution.class)),
+            it -> it.getTotal() == 4L
         );
         assertThat(executions.getTotal()).isEqualTo(4L);
+        assertThat(executions.getResults().stream().filter(e -> e.getLabels().contains(new Label(Label.REPLAY, "true"))).count()).isEqualTo(2);
+        assertThat(executions.getResults().stream().filter(e -> e.getLabels().contains(new Label(Label.REPLAYED, "true"))).count()).isEqualTo(2);
     }
 
     @Test
@@ -1503,9 +1440,9 @@ class ExecutionControllerRunnerTest {
         // listen to the execution queue
         AtomicReference<Execution> killedExecution = new AtomicReference<>();
         CountDownLatch killedLatch = new CountDownLatch(1);
-        Flux<Execution> receiveExecutions = TestsUtils.receive(executionQueue, e -> {
-            if (e.getLeft().getState().getCurrent() == State.Type.KILLED) {
-                killedExecution.set(e.getLeft());
+        Flux<FollowExecutionEvent> receiveExecutions = TestsUtils.receive(executionEventQueue, e -> {
+            if (e.getLeft().eventType() == ExecutionEventType.TERMINATED) {
+                killedExecution.set(executionRepositoryInterface.findById(e.getLeft().tenantId(), e.getLeft().executionId()).orElseThrow());
                 killedLatch.countDown();
             }
         });
@@ -1513,8 +1450,8 @@ class ExecutionControllerRunnerTest {
         // listen to the executionkilled queue
         AtomicReference<String> executionKilledId = new AtomicReference<>();
         CountDownLatch executionKilledLatch = new CountDownLatch(1);
-        Flux<ExecutionKilled> receiveKilled = TestsUtils.receive(killQueue, e -> {
-            executionKilledId.set(((ExecutionKilledExecution) e.getLeft()).getExecutionId());
+        killQueue.addListener(e -> {
+            executionKilledId.set(((ExecutionKilledExecution) e).getExecutionId());
             executionKilledLatch.countDown();
         });
 
@@ -1534,7 +1471,6 @@ class ExecutionControllerRunnerTest {
 
         //check that an executionkilled message has been sent
         assertTrue(executionKilledLatch.await(10, TimeUnit.SECONDS));
-        receiveKilled.blockLast();
         assertThat(executionKilledId.get()).isEqualTo(runningExecution.getId());
 
         // retrieve the execution from the API and check that the task has been set to killed
@@ -1561,7 +1497,8 @@ class ExecutionControllerRunnerTest {
 
         assertThat(executions.getTotal()).isEqualTo(0L);
 
-        triggerExecutionInputsFlowExecution(tenantId, false);
+        Execution execution = triggerExecutionInputsFlowExecution(tenantId, false);
+        awaitExecution(execution.getId(), exec -> exec.getState().getCurrent().isSuccess());
 
         // + is there to simulate that a space was added (this can be the case from UI autocompletion for eg.)
         executions = client.toBlocking().retrieve(
@@ -1672,10 +1609,11 @@ class ExecutionControllerRunnerTest {
             HttpRequest.POST("/api/v1/%s/executions/".formatted(tenantId) + result.getId() + "/labels", List.of(new Label("existing", "updated"), new Label("newKey", "value"))),
             Execution.class
         );
-        assertThat(response.getLabels()).containsExactlyInAnyOrder(
-            new Label(Label.CORRELATION_ID, response.getId()),
-            new Label("existing", "updated"),
-            new Label("newKey", "value")
+        assertThat(response).isNotNull();
+
+        awaitExecution(
+            result.getId(),
+            exec -> exec.getLabels().contains(new Label("existing", "updated")) && exec.getLabels().contains(new Label("newKey", "value"))
         );
 
         // update label on a not found execution
@@ -1710,9 +1648,10 @@ class ExecutionControllerRunnerTest {
         assertThat(response.getCount()).isEqualTo(3);
 
         // load one of the executions to check that labels have been correctly updated
-        Execution execution = client.toBlocking().retrieve(
-            GET("/api/v1/%s/executions/".formatted(tenantId) + result1.getId()),
-            Execution.class);
+        Execution execution = await().atMost(Duration.ofSeconds(10)).until(
+            () -> client.toBlocking().retrieve(GET("/api/v1/%s/executions/".formatted(tenantId) + result1.getId()), Execution.class),
+            it -> it.getLabels().contains(new Label("key", "value"))
+        );
         assertThat(execution.getLabels()).hasSize(3);
         assertThat(execution.getLabels()).contains(new Label("key", "value"));
     }
@@ -1767,9 +1706,10 @@ class ExecutionControllerRunnerTest {
         assertThat(response.getCount()).isEqualTo(3);
 
         // check that the existing have been correctly updated
-        Execution execution1 = client.toBlocking().retrieve(
-            GET("/api/v1/%s/executions/".formatted(tenantId) + resultWithLabel.getId()),
-            Execution.class);
+        Execution execution1 = await().atMost(Duration.ofSeconds(10)).until(
+            () -> client.toBlocking().retrieve(GET("/api/v1/%s/executions/".formatted(tenantId) + resultWithLabel.getId()), Execution.class),
+            it -> it.getLabels().contains(new Label(statusLabelKey, "done"))
+        );
         assertThat(execution1.getLabels()).containsExactlyInAnyOrder(
             new Label(Label.CORRELATION_ID, execution1.getId()),
             new Label("existing", "label"),
@@ -1777,9 +1717,10 @@ class ExecutionControllerRunnerTest {
         );
 
         // check that the existing have been correctly added
-        Execution execution2 = client.toBlocking().retrieve(
-            GET("/api/v1/%s/executions/".formatted(tenantId) + resultWithNoLabel.getId()),
-            Execution.class);
+        Execution execution2 = await().atMost(Duration.ofSeconds(10)).until(
+            () -> client.toBlocking().retrieve(GET("/api/v1/%s/executions/".formatted(tenantId) + resultWithNoLabel.getId()), Execution.class),
+            it -> it.getLabels().contains(new Label(statusLabelKey, "done"))
+        );
         assertThat(execution2.getLabels()).containsExactlyInAnyOrder(
             new Label(Label.CORRELATION_ID, execution2.getId()),
             new Label("existing", "label"),
@@ -1787,9 +1728,10 @@ class ExecutionControllerRunnerTest {
         );
 
         // check that the existing have been correctly added and the existing label kept as it was
-        Execution execution3 = client.toBlocking().retrieve(
-            GET("/api/v1/%s/executions/".formatted(tenantId) + resultWithDifferentLabel.getId()),
-            Execution.class);
+        Execution execution3 = await().atMost(Duration.ofSeconds(10)).until(
+            () -> client.toBlocking().retrieve(GET("/api/v1/%s/executions/".formatted(tenantId) + resultWithDifferentLabel.getId()), Execution.class),
+            it -> it.getLabels().contains(new Label(statusLabelKey, "done"))
+        );
         assertThat(execution3.getLabels()).containsExactlyInAnyOrder(
             new Label(Label.CORRELATION_ID, execution3.getId()),
             new Label("existing", "label"),
@@ -1826,9 +1768,10 @@ class ExecutionControllerRunnerTest {
         assertThat(exception.getStatus().getCode()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY.getCode());
 
         // check that the existing have been correctly updated
-        Execution execution1 = client.toBlocking().retrieve(
-            GET("/api/v1/%s/executions/".formatted(tenantId) + resultWithLabel.getId()),
-            Execution.class);
+        Execution execution1 = await().atMost(Duration.ofSeconds(10)).until(
+            () -> client.toBlocking().retrieve(GET("/api/v1/%s/executions/".formatted(tenantId) + resultWithLabel.getId()), Execution.class),
+            it -> it.getLabels().contains(new Label(statusLabelKey, "done"))
+        );
         assertThat(execution1.getLabels()).containsExactlyInAnyOrder(
             new Label(Label.CORRELATION_ID, execution1.getId()),
             new Label("existing", "label"),
@@ -1836,9 +1779,10 @@ class ExecutionControllerRunnerTest {
         );
 
         // check that the existing have been correctly added
-        Execution execution2 = client.toBlocking().retrieve(
-            GET("/api/v1/%s/executions/".formatted(tenantId) + resultWithNoLabel.getId()),
-            Execution.class);
+        Execution execution2 = await().atMost(Duration.ofSeconds(10)).until(
+            () -> client.toBlocking().retrieve(GET("/api/v1/%s/executions/".formatted(tenantId) + resultWithNoLabel.getId()), Execution.class),
+            it -> it.getLabels().contains(new Label(statusLabelKey, "done"))
+        );
         assertThat(execution2.getLabels()).containsExactlyInAnyOrder(
             new Label(Label.CORRELATION_ID, execution2.getId()),
             new Label("existing", "label"),
@@ -1846,9 +1790,10 @@ class ExecutionControllerRunnerTest {
         );
 
         // check that the existing have been correctly added and the existing label kept as it was
-        Execution execution3 = client.toBlocking().retrieve(
-            GET("/api/v1/%s/executions/".formatted(tenantId) + resultWithDifferentLabel.getId()),
-            Execution.class);
+        Execution execution3 = await().atMost(Duration.ofSeconds(10)).until(
+            () -> client.toBlocking().retrieve(GET("/api/v1/%s/executions/".formatted(tenantId) + resultWithDifferentLabel.getId()), Execution.class),
+            it -> it.getLabels().contains(new Label(statusLabelKey, "done"))
+        );
         assertThat(execution3.getLabels()).containsExactlyInAnyOrder(
             new Label(Label.CORRELATION_ID, execution3.getId()),
             new Label("existing", "label"),
@@ -1863,11 +1808,18 @@ class ExecutionControllerRunnerTest {
     void shouldPauseExecutionARunningFlow() throws QueueException, TimeoutException {
         Execution result = runnerUtils.runOneUntilRunning(TENANT_ID, TESTS_FLOW_NS, "sleep");
 
-        var response = client.toBlocking().exchange(HttpRequest.POST("/api/v1/main/executions/" + result.getId() + "/pause", null));
+        var response = client.toBlocking().exchange(
+            HttpRequest.POST("/api/v1/main/executions/" + result.getId() + "/pause", null),
+            ApiAsyncEvent.class
+        );
         assertThat(response.getStatus().getCode()).isEqualTo(HttpStatus.OK.getCode());
+        awaitExecution(result.getId(), exec -> exec.getState().getCurrent() == State.Type.PAUSED);
 
         // resume it, it should then go to completion
-        response = client.toBlocking().exchange(HttpRequest.POST("/api/v1/main/executions/" + result.getId() + "/resume", null));
+        response = client.toBlocking().exchange(
+            HttpRequest.POST("/api/v1/main/executions/" + result.getId() + "/resume", null),
+            ApiAsyncEvent.class
+        );
         assertThat(response.getStatus().getCode()).isEqualTo(HttpStatus.NO_CONTENT.getCode());
 
         var notFound = assertThrows(HttpClientResponseException.class, () -> client.toBlocking().exchange(HttpRequest.POST("/api/v1/main/executions/notfound/pause", null)));
@@ -1983,6 +1935,7 @@ class ExecutionControllerRunnerTest {
             HttpRequest.POST("/api/v1/" + tenantId + "/executions/" + result1.getId() + "/unqueue?state=CANCELLED", null)
         );
         assertThat(cancelResponse.getStatus().getCode()).isEqualTo(HttpStatus.OK.getCode());
+        awaitExecution(result1.getId(), exec -> exec.getState().getCurrent() == State.Type.CANCELLED);
 
         Optional<Execution> cancelledExecution = executionRepositoryInterface.findById(tenantId, result1.getId());
         assertThat(cancelledExecution.isPresent()).isTrue();
@@ -2018,6 +1971,8 @@ class ExecutionControllerRunnerTest {
 
         var response = client.toBlocking().exchange(HttpRequest.POST("/api/v1/" + tenantId + "/executions/" + result.getId() + "/force-run", null));
         assertThat(response.getStatus().getCode()).isEqualTo(HttpStatus.OK.getCode());
+        awaitExecution(result.getId(), exec -> exec.getState().getCurrent() != State.Type.QUEUED);
+
         Optional<Execution> forcedRun = executionRepositoryInterface.findById(tenantId, result.getId());
         assertThat(forcedRun.isPresent()).isTrue();
         assertThat(forcedRun.get().getState().getCurrent()).isNotEqualTo(State.Type.QUEUED);
@@ -2050,9 +2005,11 @@ class ExecutionControllerRunnerTest {
         String tenantId = "shouldforcerunexecutionacreatedflow";
         when(tenantService.resolveTenant()).thenReturn(tenantId);
         Execution result = this.createExecution(tenantId, TESTS_FLOW_NS, "minimal");
-        this.executionQueue.emit(result);
+        this.executionRepositoryInterface.save(result);
 
         var response = client.toBlocking().exchange(HttpRequest.POST("/api/v1/" + tenantId + "/executions/" + result.getId() + "/force-run", null));
+        awaitExecution(result.getId(), exec -> exec.getState().getCurrent() != Type.CREATED);
+
         assertThat(response.getStatus().getCode()).isEqualTo(HttpStatus.OK.getCode());
         Optional<Execution> forcedRun = executionRepositoryInterface.findById(tenantId, result.getId());
         assertThat(forcedRun.isPresent()).isTrue();
@@ -2067,9 +2024,12 @@ class ExecutionControllerRunnerTest {
 
         var response = client.toBlocking().exchange(HttpRequest.POST("/api/v1/main/executions/" + result.getId() + "/force-run", null));
         assertThat(response.getStatus().getCode()).isEqualTo(HttpStatus.OK.getCode());
-        Optional<Execution> forcedRun = executionRepositoryInterface.findById(TENANT_ID, result.getId());
-        assertThat(forcedRun.isPresent()).isTrue();
-        assertThat(forcedRun.get().getState().getCurrent()).isNotEqualTo(State.Type.PAUSED);
+        Execution forcedRun = runnerUtils.awaitExecution(
+            e -> e.getId().equals(result.getId()) && e.getState().getCurrent() != Type.PAUSED,
+            result,
+            Duration.ofSeconds(10)
+        );
+        assertThat(forcedRun.getState().getCurrent()).isNotEqualTo(State.Type.PAUSED);
     }
 
 
@@ -2215,7 +2175,6 @@ class ExecutionControllerRunnerTest {
 
         return MultipartBody.builder()
             .addPart("string", "myString")
-            .addPart("enum", "ENUM_VALUE")
             .addPart("int", "42")
             .addPart("float", "42.42")
             .addPart("instant", "2019-10-06T18:27:49Z")
@@ -2241,34 +2200,46 @@ class ExecutionControllerRunnerTest {
         Execution result = runnerUtils.runOne(tenantId, TESTS_FLOW_NS, "minimal");
         assertThat(result.getState().getCurrent()).isEqualTo(State.Type.SUCCESS);
 
-        Execution executionWithLabels = client.toBlocking().retrieve(
+        ApiAsyncEvent executionWithLabels = client.toBlocking().retrieve(
                 HttpRequest.POST("/api/v1/%s/executions/".formatted(tenantId) + result.getId() + "/labels", List.of(
                                 new Label("flow-label-1", "flow-label-1"),
                                 new Label("flow-label-2", "flow-label-2"))),
-                Execution.class
+                ApiAsyncEvent.class
         );
+        assertThat(executionWithLabels).isNotNull();
 
-        List<Label> allLabelsFromExecution = executionWithLabels.getLabels();
-        assertLabelCounts(allLabelsFromExecution, 2, greaterThan(0));
+        Execution updated = awaitExecution(
+            result.getId(),
+            exec -> !exec.getLabels().contains(new Label("existing", "label"))
+        );
+        assertThat(updated.getLabels()).contains(new Label("flow-label-1", "flow-label-1"), new Label("flow-label-2", "flow-label-2"));
 
         // Update with only one custom label
-        Execution executionWithOneLabel = client.toBlocking().retrieve(
+        ApiAsyncEvent executionWithOneLabel = client.toBlocking().retrieve(
                 HttpRequest.POST("/api/v1/%s/executions/".formatted(tenantId) + result.getId() + "/labels",
                         List.of(new Label("flow-label-1", "flow-label-1"))),
-                Execution.class
+            ApiAsyncEvent.class
         );
+        assertThat(executionWithOneLabel).isNotNull();
 
-        allLabelsFromExecution = executionWithOneLabel.getLabels();
-        assertLabelCounts(allLabelsFromExecution, 1, greaterThan(0));
+        updated = awaitExecution(
+            result.getId(),
+            exec -> !exec.getLabels().contains(new Label("flow-label-2", "flow-label-2"))
+        );
+        assertThat(updated.getLabels()).contains(new Label("flow-label-1", "flow-label-1"));
 
         // Remove all custom labels
         Execution executionWithNoLabels = client.toBlocking().retrieve(
                 HttpRequest.POST("/api/v1/%s/executions/".formatted(tenantId) + result.getId() + "/labels", Collections.emptyList()),
                 Execution.class
         );
+        assertThat(executionWithNoLabels).isNotNull();
 
-        allLabelsFromExecution = executionWithNoLabels.getLabels();
-        assertLabelCounts(allLabelsFromExecution, 0, greaterThan(0));
+        updated = awaitExecution(
+            result.getId(),
+            exec -> !exec.getLabels().contains(new Label("flow-label-1", "flow-label-1"))
+        );
+        assertThat(updated.getLabels().stream().allMatch(l -> l.key().startsWith(Label.SYSTEM_PREFIX))).isTrue();
     }
 
     @Test
@@ -2304,11 +2275,12 @@ class ExecutionControllerRunnerTest {
         assertThat(suspended.getTaskRunList().getFirst().getState().getCurrent()).isEqualTo(State.Type.BREAKPOINT);
 
         // resume the suspended execution
-        HttpResponse<Void> resume = client.toBlocking().exchange(
+        HttpResponse<ApiAsyncEvent> resume = client.toBlocking().exchange(
             HttpRequest.POST("/api/v1/" + tenantId + "/executions/" + suspended.getId() + "/resume-from-breakpoint", null),
-            Void.class
+            ApiAsyncEvent.class
         );
         assertThat(resume.getStatus().getCode()).isEqualTo(HttpStatus.OK.getCode());
+        assertThat(resume.body()).isNotNull();
 
         // wait for the exec to be terminated
         Execution terminated = runnerUtils.awaitExecution(
@@ -2461,7 +2433,7 @@ class ExecutionControllerRunnerTest {
             ));
 
         assertThat(e.getStatus().getCode()).isEqualTo(HttpStatus.CONFLICT.getCode());
-        assertThat(e.getMessage()).contains("Illegal state: Execution must be terminated or paused and not killed to be restarted, current state is 'KILLED' !");
+        assertThat(e.getMessage()).contains("Illegal state: Execution must be failed to be restarted, current state is 'KILLED' !");
 
         e = assertThrows(
             HttpClientResponseException.class,
@@ -2598,6 +2570,97 @@ class ExecutionControllerRunnerTest {
         assertThat(response.body()).isEqualTo("{\"response\":\"abc123\"}");
     }
 
+    @Test
+    @ExecuteFlow("flows/valids/minimal.yaml")
+    void exportExecutions(Execution execution) {
+        HttpResponse<byte[]> response = client.toBlocking().exchange(
+            HttpRequest.GET("/api/v1/main/executions/export/by-query/csv"),
+            byte[].class
+        );
+
+        assertThat(response.getStatus().getCode()).isEqualTo(HttpStatus.OK.getCode());
+        assertThat(response.getHeaders().get("Content-Disposition")).contains("attachment; filename=executions.csv");
+        String csv = new String(response.body());
+        assertThat(csv).contains(execution.getId());
+    }
+
+    @Test
+    @LoadFlows(value = {"flows/valids/inputs.yaml"})
+    void commaInSingleLabelsValue() {
+        String encodedCommaWithinLabel = URLEncoder.encode("project:foo,bar", StandardCharsets.UTF_8);
+
+        MutableHttpRequest<Object> deleteRequest = HttpRequest
+            .DELETE("/api/v1/main/executions/by-query?labels=" + encodedCommaWithinLabel);
+        assertDoesNotThrow(() -> client.toBlocking().retrieve(deleteRequest, PagedResults.class));
+
+        MutableHttpRequest<List<Object>> restartRequest = HttpRequest
+            .POST("/api/v1/main/executions/restart/by-query?labels=" + encodedCommaWithinLabel, List.of());
+        assertDoesNotThrow(() -> client.toBlocking().retrieve(restartRequest, BulkResponse.class));
+
+        MutableHttpRequest<List<Object>> resumeRequest = HttpRequest
+            .POST("/api/v1/main/executions/resume/by-query?labels=" + encodedCommaWithinLabel, List.of());
+        assertDoesNotThrow(() -> client.toBlocking().retrieve(resumeRequest, BulkResponse.class));
+
+        MutableHttpRequest<List<Object>> replayRequest = HttpRequest
+            .POST("/api/v1/main/executions/replay/by-query?labels=" + encodedCommaWithinLabel, List.of());
+        assertDoesNotThrow(() -> client.toBlocking().retrieve(replayRequest, BulkResponse.class));
+
+        MutableHttpRequest<List<Object>> labelsRequest = HttpRequest
+            .POST("/api/v1/main/executions/labels/by-query?labels=" + encodedCommaWithinLabel, List.of());
+        assertDoesNotThrow(() -> client.toBlocking().retrieve(labelsRequest, BulkResponse.class));
+
+        MutableHttpRequest<List<Object>> killRequest = HttpRequest
+            .DELETE("/api/v1/main/executions/kill/by-query?labels=" + encodedCommaWithinLabel, List.of());
+        assertDoesNotThrow(() -> client.toBlocking().retrieve(killRequest, BulkResponse.class));
+
+        MutableHttpRequest<MultipartBody> triggerRequest = HttpRequest
+            .POST("/api/v1/main/executions/trigger/" + TESTS_FLOW_NS + "/inputs?labels=" + encodedCommaWithinLabel, createExecutionInputsFlowBody())
+            .contentType(MediaType.MULTIPART_FORM_DATA_TYPE);
+        assertThat(client.toBlocking().retrieve(triggerRequest, Execution.class).getLabels()).contains(new Label("project", "foo,bar"));
+
+        MutableHttpRequest<MultipartBody> createRequest = HttpRequest
+            .POST("/api/v1/main/executions/" + TESTS_FLOW_NS + "/inputs?labels=" + encodedCommaWithinLabel, createExecutionInputsFlowBody())
+            .contentType(MediaType.MULTIPART_FORM_DATA_TYPE);
+        assertThat(client.toBlocking().retrieve(createRequest, Execution.class).getLabels()).contains(new Label("project", "foo,bar"));
+
+        MutableHttpRequest<Object> searchRequest = HttpRequest
+            .GET("/api/v1/main/executions/search?filters[labels][EQUALS][project]=foo,bar");
+        await().atMost(Duration.ofSeconds(10)).until(
+            () -> client.toBlocking().retrieve(searchRequest, PagedResults.class).getTotal(),
+            it -> it == 2L
+        );
+
+        MutableHttpRequest<Object> searchRequest_oldParameters = HttpRequest
+            .GET("/api/v1/main/executions/search?labels=project:foo,bar");
+        assertThat(client.toBlocking().retrieve(searchRequest_oldParameters, PagedResults.class).getTotal()).isEqualTo(2L);
+
+        MutableHttpRequest<Object> searchRequest_triggerExecution = HttpRequest
+            .GET("/api/v1/executions/search?triggerExecutionId=test");
+        assertThat(client.toBlocking().retrieve(searchRequest_triggerExecution, PagedResults.class).getTotal()).isEqualTo(0L);
+    }
+
+    @Test
+    void commaInOneOfMultiLabels() {
+        String encodedCommaWithinLabel = URLEncoder.encode("project:foo,bar", StandardCharsets.UTF_8);
+        String encodedRegularLabel = URLEncoder.encode("status:test", StandardCharsets.UTF_8);
+
+        MutableHttpRequest<MultipartBody> createRequest = HttpRequest
+            .POST("/api/v1/main/executions/" + TESTS_FLOW_NS + "/inputs?labels=" + encodedCommaWithinLabel + "&labels=" + encodedRegularLabel, createExecutionInputsFlowBody())
+            .contentType(MediaType.MULTIPART_FORM_DATA_TYPE);
+        assertThat(client.toBlocking().retrieve(createRequest, Execution.class).getLabels()).contains(new Label("project", "foo,bar"), new Label("status", "test"));
+
+        MutableHttpRequest<Object> searchRequest = HttpRequest
+            .GET("/api/v1/main/executions/search?filters[labels][EQUALS][project]=foo,bar" + "&filters[labels][EQUALS][status]=test");
+        await().atMost(Duration.ofSeconds(10)).until(
+            () -> client.toBlocking().retrieve(searchRequest, PagedResults.class).getTotal(),
+            it -> it == 1L
+        );
+
+        MutableHttpRequest<Object> searchRequest_oldParameters = HttpRequest
+            .GET("/api/v1/main/executions/search?labels=project:foo,bar" + "&labels=status:test");
+        assertThat(client.toBlocking().retrieve(searchRequest_oldParameters, PagedResults.class).getTotal()).isEqualTo(1L);
+    }
+
     private List<Label> getExecutionNonSystemLabels(List<Label> labels) {
         return labels == null ? List.of() :
             labels.stream()
@@ -2633,7 +2696,7 @@ class ExecutionControllerRunnerTest {
     }
 
     private Execution awaitExecution(String executionId) {
-        return Awaitility.await()
+        return await()
             .atMost(Duration.ofSeconds(10))
             .with().pollDelay(Duration.ofMillis(100)).pollInterval(Duration.ofMillis(250))
             .until(
@@ -2643,7 +2706,7 @@ class ExecutionControllerRunnerTest {
     }
 
     private Execution awaitExecution(String executionId, State.Type state) {
-        return Awaitility.await()
+        return await()
             .atMost(Duration.ofSeconds(10))
             .with().pollDelay(Duration.ofMillis(100)).pollInterval(Duration.ofMillis(250))
             .until(
@@ -2653,7 +2716,7 @@ class ExecutionControllerRunnerTest {
     }
 
     private Execution awaitExecution(String executionId, Predicate<Execution> predicate) {
-        return Awaitility.await()
+        return await()
             .atMost(Duration.ofSeconds(10))
             .with().pollDelay(Duration.ofMillis(100)).pollInterval(Duration.ofMillis(250))
             .until(

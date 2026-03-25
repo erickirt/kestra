@@ -114,25 +114,28 @@ public abstract class AbstractJdbcKvMetadataRepository extends AbstractJdbcCrudR
             .transactionResult(configuration -> {
                 DSLContext context = DSL.using(configuration);
 
-                Optional<PersistedKvMetadata> maybePrevious = this.findByName(kvMetadata.getTenantId(), kvMetadata.getNamespace(), kvMetadata.getName());
-                PersistedKvMetadata kvMetadataToPersist = kvMetadata.asLast().toBuilder().version(maybePrevious.map(PersistedKvMetadata::getVersion).orElse(0) + 1).build();
-                if (maybePrevious.isPresent()) {
-                    PersistedKvMetadata previous = maybePrevious.get();
-                    if (kvMetadata.isDeleted()) {
-                        // If we are deleting, we just mark the previous as deleted without changing version and we return directly
-                        kvMetadataToPersist = previous.toBuilder().deleted(true).updated(Instant.now()).build();
-                    } else {
-                        // We mark the previous as not last
-                        PersistedKvMetadata previousAsNotLast = previous.toBuilder().last(false).build();
-                        Map<Field<Object>, Object> fields = this.jdbcRepository.persistFields(previousAsNotLast);
-                        this.jdbcRepository.persist(previousAsNotLast, context, fields);
-                    }
-                }
-
-                Map<Field<Object>, Object> fields = this.jdbcRepository.persistFields(kvMetadataToPersist);
-                this.jdbcRepository.persist(kvMetadataToPersist, context, fields);
-
-                return kvMetadataToPersist;
+                return saveKvMetadata(context, kvMetadata);
             });
+    }
+
+    private PersistedKvMetadata saveKvMetadata(DSLContext context, PersistedKvMetadata kvMetadata) {
+        Optional<PersistedKvMetadata> maybePrevious = this.findByName(kvMetadata.getTenantId(), kvMetadata.getNamespace(), kvMetadata.getName());
+        PersistedKvMetadata kvMetadataToPersist = kvMetadata.asLast().toBuilder().version(maybePrevious.map(PersistedKvMetadata::getVersion).orElse(0) + 1).build();
+        if (maybePrevious.isPresent()) {
+            PersistedKvMetadata previous = maybePrevious.get();
+            if (kvMetadata.isDeleted()) {
+                // If we are deleting, we just mark the previous as deleted without changing version and we return directly
+                kvMetadataToPersist = previous.toBuilder().deleted(true).updated(Instant.now()).build();
+            } else {
+                // We mark the previous as not last
+                PersistedKvMetadata previousAsNotLast = previous.toBuilder().last(false).build();
+                Map<Field<Object>, Object> fields = this.jdbcRepository.persistFields(previousAsNotLast);
+                this.jdbcRepository.persist(previousAsNotLast, context, fields);
+            }
+        }
+
+        Map<Field<Object>, Object> fields = this.jdbcRepository.persistFields(kvMetadataToPersist);
+        this.jdbcRepository.persist(kvMetadataToPersist, context, fields);
+        return kvMetadataToPersist;
     }
 }

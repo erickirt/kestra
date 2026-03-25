@@ -16,7 +16,6 @@ import io.kestra.core.utils.IdUtils;
 import io.kestra.plugin.scripts.exec.scripts.models.DockerOptions;
 import io.kestra.plugin.scripts.exec.scripts.models.RunnerType;
 import io.kestra.plugin.scripts.exec.scripts.models.ScriptOutput;
-import io.kestra.plugin.scripts.runner.docker.Docker;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.With;
@@ -62,6 +61,7 @@ public class CommandsWrapper implements TaskCommands {
     private io.kestra.core.models.tasks.runners.AbstractLogConsumer logConsumer;
 
     @With
+    @Deprecated
     private RunnerType runnerType;
 
     @With
@@ -71,6 +71,7 @@ public class CommandsWrapper implements TaskCommands {
     private TaskRunner<?> taskRunner;
 
     @With
+    @Deprecated
     private DockerOptions dockerOptions;
 
     @With
@@ -152,12 +153,11 @@ public class CommandsWrapper implements TaskCommands {
             NamespaceFilesUtils.loadNamespaceFiles(runContext, this.namespaceFiles);
         }
 
-        TaskRunner<T> realTaskRunner = this.getTaskRunner();
         if (this.inputFiles != null) {
-            FilesService.inputFiles(runContext, realTaskRunner.additionalVars(runContext, this), this.inputFiles);
+            FilesService.inputFiles(runContext, taskRunner.additionalVars(runContext, this), this.inputFiles);
         }
 
-        RunContext taskRunnerRunContext = runContext.cloneForPlugin(realTaskRunner);
+        RunContext taskRunnerRunContext = runContext.cloneForPlugin(taskRunner);
 
         List<String> renderedCommands = this.renderCommands(runContext, commands);
         List<String> renderedBeforeCommands = this.renderCommands(runContext, beforeCommands);
@@ -177,7 +177,7 @@ public class CommandsWrapper implements TaskCommands {
         ScriptOutput.ScriptOutputBuilder scriptOutputBuilder = ScriptOutput.builder();
 
         try {
-            TaskRunnerResult<T> taskRunnerResult = realTaskRunner.run(taskRunnerRunContext, this, this.outputFiles);
+            TaskRunnerResult<T> taskRunnerResult = (TaskRunnerResult<T>) taskRunner.run(taskRunnerRunContext, this, this.outputFiles);
             scriptOutputBuilder.exitCode(taskRunnerResult.getExitCode())
                 .outputFiles(getOutputFiles(taskRunnerRunContext))
                 .taskRunner(taskRunnerResult.getDetails());
@@ -213,33 +213,7 @@ public class CommandsWrapper implements TaskCommands {
         return outputFiles;
     }
 
-    @SuppressWarnings("unchecked")
-    public <T extends TaskRunnerDetailResult> TaskRunner<T> getTaskRunner() {
-        if (runnerType != null) {
-            return switch (runnerType) {
-                case DOCKER -> (TaskRunner<T>) Docker.from(dockerOptions);
-                case PROCESS -> (TaskRunner<T>) new Process();
-            };
-        }
-
-        // special case to take into account the deprecated dockerOptions if set
-        if (taskRunner instanceof Docker && dockerOptions != null) {
-            return (TaskRunner<T>) Docker.from(dockerOptions);
-        }
-
-        return (TaskRunner<T>) taskRunner;
-    }
-
-    public Boolean getEnableOutputDirectory() {
-        if (this.enableOutputDirectory == null) {
-            // For compatibility reasons, if legacy runnerType property is used, we enable the output directory
-            return this.runnerType != null;
-        }
-
-        return this.enableOutputDirectory;
-    }
-
-    public Path getOutputDirectory() {
+        public Path getOutputDirectory() {
         if (this.outputDirectory == null) {
             this.outputDirectory = this.workingDirectory.resolve(IdUtils.create());
             if (!this.outputDirectory.toFile().mkdirs()) {

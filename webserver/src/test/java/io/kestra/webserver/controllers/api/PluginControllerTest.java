@@ -131,11 +131,11 @@ class PluginControllerTest {
     @Test
     void docWithAlert() {
         DocumentationWithSchema doc = client.toBlocking().retrieve(
-            HttpRequest.GET(PATH + "/io.kestra.plugin.core.state.Set"),
+            HttpRequest.GET(PATH + "/io.kestra.core.plugins.test.DeprecatedTask"),
             DocumentationWithSchema.class
         );
 
-        assertThat(doc.getMarkdown()).contains("io.kestra.plugin.core.state.Set");
+        assertThat(doc.getMarkdown()).contains("io.kestra.core.plugins.test.DeprecatedTask");
         assertThat(doc.getMarkdown()).contains("::: warning\n");
     }
 
@@ -173,18 +173,8 @@ class PluginControllerTest {
             Argument.mapOf(String.class, Object.class)
         );
 
-        assertThat((Map<String, Object>) doc.get("properties")).hasSize(24);
+        assertThat((Map<String, Object>) doc.get("properties")).hasSize(22);
         assertThat((List<String>) doc.get("required")).hasSize(3);
-    }
-
-    @Test
-    void template() {
-        Map<String, Object> doc = client.toBlocking().retrieve(
-            HttpRequest.GET(PATH + "/schemas/template"),
-            Argument.mapOf(String.class, Object.class)
-        );
-
-        assertThat(doc.get("$ref")).isEqualTo("#/definitions/io.kestra.core.models.templates.Template");
     }
 
     @Test
@@ -204,7 +194,7 @@ class PluginControllerTest {
             Argument.listOf(InputType.class)
         );
 
-        assertThat(doc.size()).isEqualTo(19);
+        assertThat(doc.size()).isEqualTo(17);
     }
 
     @SuppressWarnings("unchecked")
@@ -217,8 +207,7 @@ class PluginControllerTest {
 
         assertThat(doc.getSchema().getProperties().size()).isEqualTo(3);
         Map<String, Object> properties = (Map<String, Object>) doc.getSchema().getProperties().get("properties");
-        assertThat(properties.size()).isEqualTo(9);
-        assertThat(((Map<String, Object>) properties.get("name")).get("$deprecated")).isEqualTo(true);
+        assertThat(properties.size()).isEqualTo(8);
     }
 
     @Test

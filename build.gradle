@@ -61,10 +61,6 @@ java {
         languageVersion = JavaLanguageVersion.of(25)
     }
 }
-compileJava {
-    // We use 21 release (target) level temporary, will be switched to 25 for 2.0
-    options.release = 21
-}
 
 
 abstract class GenericLocationProvider implements CommandLineArgumentProvider {
@@ -99,10 +95,6 @@ allprojects {
             toolchain {
                 languageVersion = JavaLanguageVersion.of(25)
             }
-        }
-        compileJava {
-            // We use 21 release (target) level temporary, will be switched to 25 for 2.0
-            options.release = 21
         }
 
         repositories {
@@ -202,10 +194,6 @@ subprojects {subProj ->
                 languageVersion = JavaLanguageVersion.of(25)
             }
         }
-        compileJava {
-            // We use 21 release (target) level temporary, will be switched to 25 for 2.0
-            options.release = 21
-        }
 
         configurations {
             agent {
@@ -244,6 +232,9 @@ subprojects {subProj ->
 
             //assertj
             testImplementation 'org.assertj:assertj-core'
+
+            // awaitility
+            testImplementation 'org.awaitility:awaitility'
 
             agent "org.aspectj:aspectjweaver:1.9.25.1"
 

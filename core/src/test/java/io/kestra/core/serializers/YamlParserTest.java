@@ -122,8 +122,8 @@ class YamlParserTest {
     void inputs() {
         Flow flow = this.parse("flows/valids/inputs.yaml");
 
-        assertThat(flow.getInputs().size()).isEqualTo(31);
-        assertThat(flow.getInputs().stream().filter(Input::getRequired).count()).isEqualTo(12L);
+        assertThat(flow.getInputs().size()).isEqualTo(30);
+        assertThat(flow.getInputs().stream().filter(Input::getRequired).count()).isEqualTo(11L);
         assertThat(flow.getInputs().stream().filter(r -> !r.getRequired()).count()).isEqualTo(19L);
         assertThat(flow.getInputs().stream().filter(r -> r.getDefaults() != null).count()).isEqualTo(4L);
         assertThat(flow.getInputs().stream().filter(r -> r instanceof StringInput stringInput && stringInput.getValidator() != null).count()).isEqualTo(1L);
@@ -147,18 +147,6 @@ class YamlParserTest {
         );
 
         assertThat(exception.getMessage()).contains("Invalid type: FOO");
-    }
-
-    @Test
-    void listeners() {
-        ConstraintViolationException exception = assertThrows(
-            ConstraintViolationException.class,
-            () -> modelValidator.validate(this.parse("flows/invalids/listener.yaml"))
-        );
-
-        assertThat(exception.getConstraintViolations().size()).isEqualTo(2);
-        assertThat(new ArrayList<>(exception.getConstraintViolations()).getFirst().getMessage()).contains("must not be empty");
-        assertThat(new ArrayList<>(exception.getConstraintViolations()).get(1).getMessage()).isEqualTo("must not be empty");
     }
 
     @Test
@@ -197,7 +185,7 @@ class YamlParserTest {
         );
 
         assertThat(exception.getConstraintViolations().size()).isEqualTo(2);
-        assertThat(exception.getConstraintViolations().stream().filter(e -> e.getMessage().contains("Invalid type")).findFirst().orElseThrow().getMessage()).contains("Invalid type: io.kestra.plugin.core.debug.MissingOne");
+        assertThat(exception.getConstraintViolations().stream().filter(e -> e.getMessage().contains("Invalid type")).findFirst().orElseThrow().getMessage()).contains("Invalid type: io.kestra.plugin.core.debug.MissingTwo");
     }
 
     @Test
@@ -245,7 +233,7 @@ class YamlParserTest {
         );
 
         assertThat(exception.getConstraintViolations().size()).isEqualTo(1);
-        assertThat(new ArrayList<>(exception.getConstraintViolations()).getFirst().getMessage()).contains("Duplicate field 'variables.tf'");
+        assertThat(new ArrayList<>(exception.getConstraintViolations()).getFirst().getMessage()).contains("Duplicate field 'message'");
     }
 
     @Test

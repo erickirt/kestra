@@ -3,7 +3,7 @@ package io.kestra.core.runners;
 import io.kestra.core.server.Service;
 import io.kestra.core.utils.Await;
 import io.kestra.core.utils.ExecutorsUtils;
-import io.kestra.worker.DefaultWorker;
+import io.kestra.core.worker.Controller;
 import io.micronaut.context.ApplicationContext;
 import io.micronaut.context.annotation.Value;
 import jakarta.annotation.PreDestroy;
@@ -16,7 +16,6 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
-import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -28,6 +27,7 @@ public class TestRunner implements Runnable, AutoCloseable {
     @Setter private int workerThread = Math.max(3, Runtime.getRuntime().availableProcessors()) * 4;
     @Setter private boolean schedulerEnabled = true;
     @Setter private boolean workerEnabled = true;
+    @Setter private boolean workerControllerEnabled = true;
 
     @Inject
     private ExecutorsUtils executorsUtils;
@@ -49,16 +49,19 @@ public class TestRunner implements Runnable, AutoCloseable {
         running.set(true);
 
         poolExecutor = executorsUtils.cachedThreadPool("standalone-runner");
-        ExecutorInterface executor = applicationContext.getBean(ExecutorInterface.class);
+        Executor executor = applicationContext.getBean(Executor.class);
         servers.add(executor);
         poolExecutor.execute(executor);
 
+        if (workerControllerEnabled) {
+            Controller controller = applicationContext.getBean(Controller.class);
+            poolExecutor.execute(controller::start);
+            servers.add(controller);
+        }
+
         if (workerEnabled) {
-            // FIXME: For backward-compatibility with Kestra 0.15.x and earliest we still used UUID for Worker ID instead of IdUtils
-            String workerID = UUID.randomUUID().toString();
-            Worker worker = applicationContext.createBean(DefaultWorker.class, workerID, workerThread, null);
-            applicationContext.registerSingleton(worker); //
-            poolExecutor.execute(worker);
+            Worker worker = applicationContext.getBean(Worker.class);
+            poolExecutor.execute(() -> worker.start(workerThread, null));
             servers.add(worker);
         }
 

@@ -15,6 +15,7 @@ import io.kestra.core.models.triggers.AbstractTrigger;
 import io.kestra.core.plugins.PluginConfigurations;
 import io.kestra.core.services.KVStoreService;
 import io.kestra.core.services.NamespaceService;
+import io.kestra.core.services.TaskOutputService;
 import io.kestra.core.storages.InternalStorage;
 import io.kestra.core.storages.NamespaceFactory;
 import io.kestra.core.storages.StorageContext;
@@ -84,6 +85,9 @@ public class RunContextFactory {
     @Inject
     private AssetManagerFactory assetManagerFactory;
 
+    @Inject
+    private TaskOutputService taskOutputService;
+
     // hacky
     public RunContextInitializer initializer() {
         return applicationContext.getBean(RunContextInitializer.class);
@@ -117,6 +121,7 @@ public class RunContextFactory {
                     newRunVariablesBuilder()
                         .withFlow(flow)
                         .withExecution(execution)
+                        .withOutputs(taskOutputService.computeOutputs(execution))
                         .withDecryptVariables(decryptVariables)
                         .withSecretInputs(secretInputsFromFlow(flow))
                 )
@@ -146,6 +151,7 @@ public class RunContextFactory {
                 .withFlow(flow)
                 .withTask(task)
                 .withExecution(execution)
+                .withOutputs(taskOutputService.computeOutputs(execution))
                 .withTaskRun(taskRun)
                 .withDecryptVariables(decryptVariables)
                 .withSecretInputs(secretInputsFromFlow(flow))

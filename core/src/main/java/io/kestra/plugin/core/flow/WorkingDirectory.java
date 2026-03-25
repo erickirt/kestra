@@ -255,7 +255,7 @@ public class WorkingDirectory extends Sequential implements NamespaceFilesInterf
                 .state(new State())
                 .build()
             )
-            .runContext(runContext)
+            .data(WorkerTaskData.from(runContext))
             .build();
     }
 

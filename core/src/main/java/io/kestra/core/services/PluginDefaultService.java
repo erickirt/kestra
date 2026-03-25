@@ -17,20 +17,15 @@ import io.kestra.core.models.flows.FlowWithException;
 import io.kestra.core.models.flows.FlowWithSource;
 import io.kestra.core.models.flows.PluginDefault;
 import io.kestra.core.plugins.PluginRegistry;
-import io.kestra.core.queues.QueueException;
-import io.kestra.core.queues.QueueFactoryInterface;
-import io.kestra.core.queues.QueueInterface;
 import io.kestra.core.runners.RunContextLogger;
+import io.kestra.core.runners.RunContextLoggerFactory;
 import io.kestra.core.serializers.JacksonMapper;
 import io.kestra.core.serializers.YamlParser;
 import io.kestra.core.utils.Logs;
 import io.kestra.core.utils.MapUtils;
-import io.kestra.plugin.core.flow.Template;
-import io.micronaut.context.annotation.Value;
 import io.micronaut.core.annotation.Nullable;
 import jakarta.annotation.PostConstruct;
 import jakarta.inject.Inject;
-import jakarta.inject.Named;
 import jakarta.inject.Singleton;
 import jakarta.validation.ConstraintViolationException;
 import lombok.extern.slf4j.Slf4j;
@@ -46,7 +41,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -69,32 +63,17 @@ public class PluginDefaultService {
 
     @Nullable
     @Inject
-    protected TaskGlobalDefaultConfiguration taskGlobalDefault;
-
-    @Nullable
-    @Inject
     protected PluginGlobalDefaultConfiguration pluginGlobalDefault;
 
     @Inject
-    @Named(QueueFactoryInterface.WORKERTASKLOG_NAMED)
-    @Nullable
-    protected QueueInterface<LogEntry> logQueue;
+    private RunContextLoggerFactory runContextLoggerFactory;
 
     @Inject
     protected PluginRegistry pluginRegistry;
 
-    @Value("{kestra.templates.enabled:false}")
-    private boolean templatesEnabled;
-
-
-    private final AtomicBoolean warnOnce = new AtomicBoolean(false);
-
     @PostConstruct
     void validateGlobalPluginDefault() {
         List<PluginDefault> mergedDefaults = new ArrayList<>();
-        if (taskGlobalDefault != null && taskGlobalDefault.getDefaults() != null) {
-            mergedDefaults.addAll(taskGlobalDefault.getDefaults());
-        }
 
         if (pluginGlobalDefault != null && pluginGlobalDefault.getDefaults() != null) {
             mergedDefaults.addAll(pluginGlobalDefault.getDefaults());
@@ -143,13 +122,6 @@ public class PluginDefaultService {
     protected List<PluginDefault> getGlobalDefaults() {
         List<PluginDefault> defaults = new ArrayList<>();
 
-        if (taskGlobalDefault != null && taskGlobalDefault.getDefaults() != null) {
-            if (warnOnce.compareAndSet(false, true)) {
-                log.warn("Global Task Defaults are deprecated, please use Global Plugin Defaults instead via the 'kestra.plugins.defaults' configuration property.");
-            }
-            defaults.addAll(taskGlobalDefault.getDefaults());
-        }
-
         if (pluginGlobalDefault != null && pluginGlobalDefault.getDefaults() != null) {
             defaults.addAll(pluginGlobalDefault.getDefaults());
         }
@@ -170,15 +142,8 @@ public class PluginDefaultService {
         try {
             return this.injectAllDefaults(flow, false);
         } catch (Exception e) {
-            try {
-                logQueue.emitAsync(RunContextLogger
-                    .logEntries(
-                        Execution.loggingEventFromException(e),
-                        LogEntry.of(execution)
-                    ));
-            } catch (QueueException e1) {
-                // silently do nothing
-            }
+            var logger = runContextLoggerFactory.create(execution);
+            logger.emitLogs(RunContextLogger.logEntries(Execution.loggingEventFromException(e), LogEntry.of(execution)));
             return readWithoutDefaultsOrThrow(flow);
         }
     }
@@ -397,22 +362,12 @@ public class PluginDefaultService {
         FlowWithSource withDefault = YamlParser.parse(mapFlow, FlowWithSource.class, strictParsing);
 
         // revision, tenants, and deleted are not in the 'source', so we copy them manually
-        FlowWithSource full = withDefault.toBuilder()
+        return withDefault.toBuilder()
             .tenantId(tenant)
             .revision(revision)
             .deleted(isDeleted)
             .source(source)
             .build();
-
-        if (templatesEnabled && tenant != null) {
-            // This is a hack to set the tenant in template tasks.
-            // When using the Template task, we need the tenant to fetch the Template from the database.
-            // However, as the task is executed on the Executor we cannot retrieve it from the tenant service and have no other options.
-            // So we save it at flow creation/updating time.
-            full.allTasksWithChilds().stream().filter(task -> task instanceof Template).forEach(task -> ((Template) task).setTenantId(tenant));
-        }
-
-        return full;
     }
 
 
@@ -579,50 +534,5 @@ public class PluginDefaultService {
         }
 
         return result;
-    }
-
-    // -----------------------------------------------------------------------------------------------------------------
-    // DEPRECATED
-    // -----------------------------------------------------------------------------------------------------------------
-
-    /**
-     * @deprecated use {@link #injectAllDefaults(FlowInterface, Logger)} instead
-     */
-    @Deprecated(forRemoval = true, since = "0.20")
-    public Flow injectDefaults(Flow flow, Logger logger) {
-        try {
-            return this.injectDefaults(flow);
-        } catch (Exception e) {
-            logger.warn(
-                "Can't inject plugin defaults on tenant {}, namespace '{}', flow '{}' with errors '{}'",
-                flow.getTenantId(),
-                flow.getNamespace(),
-                flow.getId(),
-                e.getMessage(),
-                e
-            );
-            return flow;
-        }
-    }
-
-    /**
-     * @deprecated use {@link #injectAllDefaults(FlowInterface, boolean)} instead
-     */
-    @Deprecated(forRemoval = true, since = "0.20")
-    public Flow injectDefaults(Flow flow) throws ConstraintViolationException {
-        if (flow instanceof FlowWithSource flowWithSource) {
-            try {
-                return this.injectAllDefaults(flowWithSource, false);
-            } catch (FlowProcessingException e) {
-                if (e.getCause() instanceof ConstraintViolationException cve) {
-                    throw cve;
-                }
-                throw new KestraRuntimeException(e);
-            }
-        }
-
-        Map<String, Object> mapFlow = NON_DEFAULT_OBJECT_MAPPER.convertValue(flow, JacksonMapper.MAP_TYPE_REFERENCE);
-        mapFlow = innerInjectDefault(flow.getTenantId(), flow.getNamespace(), mapFlow, false);
-        return YamlParser.parse(mapFlow, Flow.class, false);
     }
 }

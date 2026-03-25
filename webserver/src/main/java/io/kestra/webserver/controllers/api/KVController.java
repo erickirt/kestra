@@ -6,15 +6,13 @@ import io.kestra.core.exceptions.ResourceExpiredException;
 import io.kestra.core.models.QueryFilter;
 import io.kestra.core.models.kv.KVType;
 import io.kestra.core.models.namespaces.NamespaceInterface;
-import io.kestra.core.repositories.KvMetadataRepositoryInterface;
 import io.kestra.core.serializers.JacksonMapper;
-import io.kestra.core.storages.StorageInterface;
+import io.kestra.core.services.KVStoreService;
 import io.kestra.core.storages.kv.*;
 import io.kestra.core.tenant.TenantService;
 import io.kestra.webserver.converters.QueryFilterFormat;
 import io.kestra.webserver.responses.PagedResults;
 import io.kestra.webserver.utils.PageableUtils;
-import io.micronaut.core.annotation.Introspected;
 import io.micronaut.core.annotation.Nullable;
 import io.micronaut.data.model.Pageable;
 import io.micronaut.http.HttpHeaders;
@@ -23,7 +21,6 @@ import io.micronaut.http.MediaType;
 import io.micronaut.http.annotation.*;
 import io.micronaut.scheduling.TaskExecutors;
 import io.micronaut.scheduling.annotation.ExecuteOn;
-import io.micronaut.validation.Validated;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.ExampleObject;
@@ -35,14 +32,11 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
 
-@Validated
 @Controller("/api/v1/{tenant}")
 public class KVController {
-    @Inject
-    private KvMetadataRepositoryInterface kvMetadataRepository;
 
     @Inject
-    private StorageInterface storageInterface;
+    private KVStoreService kvStoreService;
 
     @Inject
     protected TenantService tenantService;
@@ -66,7 +60,7 @@ public class KVController {
         }) @Nullable @QueryValue(value = "sort") List<String> sort,
         @Parameter(description = "Filters. PHP-style nested query is used - example: `filters[namespace][IN]=company.team`") @QueryFilterFormat List<QueryFilter> filters
         ) throws IOException {
-        return PagedResults.of(globalKvStore().list(PageableUtils.from(page, size, sort, this::sortMapper), filters));
+        return PagedResults.of(kvStoreService.list(PageableUtils.from(page, size, sort, this::sortMapper), tenantService.resolveTenant(), null, filters));
     }
 
     @ExecuteOn(TaskExecutors.IO)
@@ -88,17 +82,17 @@ public class KVController {
         List<String> namespaces = NamespaceInterface.asTree(namespace).stream()
             .filter(ns -> !ns.equals(namespace))
             .toList();
-        return getKvEntriesWithInheritance(namespaces);
+        return getKvEntriesWithInheritance(tenantService.resolveTenant(), namespaces);
     }
 
-    protected List<KVEntry> getKvEntriesWithInheritance(List<String> namespaces) throws IOException {
+    protected List<KVEntry> getKvEntriesWithInheritance(String tenant, List<String> namespaces) throws IOException {
         List<KVEntry> kvEntries = new ArrayList<>();
         Set<String> keys = new HashSet<>();
         List<String> sortedNamespaces = namespaces.stream()
             .sorted(Comparator.comparingInt(String::length).reversed())
             .toList();
         for (String ns : sortedNamespaces) {
-            List<KVEntry> entries = kvStore(ns).list(Pageable.UNPAGED);
+            List<KVEntry> entries = kvStoreService.list(Pageable.UNPAGED, tenant, ns);
             entries.forEach(key -> {
                 if (!keys.contains(key.key())) {
                     keys.add(key.key());
@@ -187,12 +181,15 @@ public class KVController {
         return HttpResponse.ok(new ApiDeleteBulkResponse(deletedKeys));
     }
 
+    protected KVStore kvStore(String namespace) {
+        return kvStoreService.get(tenantService.resolveTenant(), namespace);
+    }
+
     /**
      * API Response for the bulk-delete operation.
      *
      * @param keys
      */
-    @Introspected
     public record ApiDeleteBulkResponse(
         @Parameter(description = "The list of keys deleted")
         List<String> keys
@@ -216,20 +213,6 @@ public class KVController {
         public List<String> keys() {
             return Optional.ofNullable(keys).orElse(List.of());
         }
-    }
-
-    protected KVStore globalKvStore() {
-        return new InternalKVStore(tenantService.resolveTenant(), null, storageInterface, kvMetadataRepository);
-    }
-
-    /**
-     * Create a new {@link KVStore} facade for the given namespace.
-     *
-     * @param namespace the namespace of the KV Store.
-     * @return a new {@link KVStore}.
-     */
-    protected KVStore kvStore(final String namespace) {
-        return new InternalKVStore(tenantService.resolveTenant(), namespace, storageInterface, kvMetadataRepository);
     }
 
     public record KvDetail(

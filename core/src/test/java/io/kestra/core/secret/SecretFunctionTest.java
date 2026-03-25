@@ -3,21 +3,21 @@ package io.kestra.core.secret;
 import static io.kestra.core.tenant.TenantService.MAIN_TENANT;
 import static org.assertj.core.api.Assertions.assertThat;
 
+import io.kestra.core.exceptions.InternalException;
 import io.kestra.core.exceptions.IllegalVariableEvaluationException;
 import io.kestra.core.junit.annotations.KestraTest;
 import io.kestra.core.junit.annotations.LoadFlows;
 import io.kestra.core.models.executions.Execution;
 import io.kestra.core.models.executions.LogEntry;
 import io.kestra.core.models.flows.State;
+import io.kestra.core.queues.DispatchQueueInterface;
 import io.kestra.core.queues.QueueException;
-import io.kestra.core.queues.QueueFactoryInterface;
-import io.kestra.core.queues.QueueInterface;
 import io.kestra.core.runners.TestRunnerUtils;
 import io.kestra.core.runners.VariableRenderer;
+import io.kestra.core.services.TaskOutputService;
 import io.kestra.core.utils.TestsUtils;
 import io.micronaut.test.annotation.MockBean;
 import jakarta.inject.Inject;
-import jakarta.inject.Named;
 
 import java.io.IOException;
 import java.util.List;
@@ -29,7 +29,6 @@ import java.util.concurrent.TimeoutException;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
-import reactor.core.publisher.Flux;
 
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
@@ -37,8 +36,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 public class SecretFunctionTest {
 
     @Inject
-    @Named(QueueFactoryInterface.WORKERTASKLOG_NAMED)
-    QueueInterface<LogEntry> logQueue;
+    DispatchQueueInterface<LogEntry> logQueue;
 
     @Inject
     private TestRunnerUtils runnerUtils;
@@ -49,23 +47,25 @@ public class SecretFunctionTest {
     @Inject
     VariableRenderer variableRenderer;
 
+    @Inject
+    TaskOutputService taskOutputService;
+
     @Test
     @LoadFlows({"flows/valids/secrets.yaml"})
     @EnabledIfEnvironmentVariable(named = "SECRET_MY_SECRET", matches = ".*")
     @EnabledIfEnvironmentVariable(named = "SECRET_NEW_LINE", matches = ".*")
-    void getSecret() throws TimeoutException, QueueException {
+    void getSecret() throws TimeoutException, QueueException, InternalException {
         List<LogEntry> logs = new CopyOnWriteArrayList<>();
-        Flux<LogEntry> receive = TestsUtils.receive(logQueue, either -> logs.add(either.getLeft()));
+        logQueue.addListener(logs::add);
 
         Execution execution = runnerUtils.runOne(MAIN_TENANT, "io.kestra.tests", "secrets");
-        assertThat(execution.getTaskRunList().getFirst().getOutputs().get("value")).isEqualTo("secretValue");
-        assertThat(execution.getTaskRunList().get(2).getOutputs().get("value")).isEqualTo("passwordveryveryveyrlongpasswordveryveryveyrlongpasswordveryveryveyrlongpasswordveryveryveyrlongpasswordveryveryveyrlong");
-        assertThat(execution.getTaskRunList().get(3).getOutputs().get("value")).isEqualTo("secretValue");
-        assertThat(execution.getTaskRunList().get(4).getOutputs()).isEmpty();
+        assertThat(taskOutputService.getOutputs(execution.getTaskRunList().getFirst()).get("value")).isEqualTo("secretValue");
+        assertThat(taskOutputService.getOutputs(execution.getTaskRunList().get(2)).get("value")).isEqualTo("passwordveryveryveyrlongpasswordveryveryveyrlongpasswordveryveryveyrlongpasswordveryveryveyrlongpasswordveryveryveyrlong");
+        assertThat(taskOutputService.getOutputs(execution.getTaskRunList().get(3)).get("value")).isEqualTo("secretValue");
+        assertThat(taskOutputService.getOutputs(execution.getTaskRunList().get(4))).isEmpty();
         assertThat(execution.getTaskRunList().get(4).getState().getCurrent()).isEqualTo(State.Type.WARNING);
 
         LogEntry matchingLog = TestsUtils.awaitLog(logs, logEntry -> logEntry.getTaskId() != null && logEntry.getTaskId().equals("log-secret"));
-        receive.blockLast();
         assertThat(matchingLog.getMessage()).contains("***");
     }
 

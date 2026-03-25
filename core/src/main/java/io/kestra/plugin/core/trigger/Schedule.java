@@ -10,17 +10,18 @@ import io.kestra.core.exceptions.InternalException;
 import io.kestra.core.models.annotations.Example;
 import io.kestra.core.models.annotations.Plugin;
 import io.kestra.core.models.annotations.PluginProperty;
-import io.kestra.core.models.conditions.Condition;
 import io.kestra.core.models.conditions.ConditionContext;
 import io.kestra.core.models.conditions.ScheduleCondition;
 import io.kestra.core.models.executions.Execution;
 import io.kestra.core.models.triggers.*;
 import io.kestra.core.runners.RunContext;
 import io.kestra.core.utils.ListUtils;
+import io.kestra.core.services.ConditionService;
+import io.kestra.core.services.LabelService;
 import io.kestra.core.validations.ScheduleValidation;
 import io.kestra.core.validations.TimezoneId;
+import io.kestra.core.scheduler.SchedulerClock;
 import io.swagger.v3.oas.annotations.media.Schema;
-import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Null;
 import lombok.AccessLevel;
@@ -33,7 +34,6 @@ import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
-import java.util.stream.Stream;
 
 import static io.kestra.core.utils.Rethrow.throwPredicate;
 
@@ -200,10 +200,6 @@ public class Schedule extends AbstractTrigger implements Schedulable, TriggerOut
     @PluginProperty
     private Boolean withSeconds = false;
 
-    @TimezoneId
-    @Schema(
-        title = "The [time zone identifier](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones) (i.e. the second column in [the Wikipedia table](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones#List)) to use for evaluating the cron expression. Default value is the server default zone ID."
-    )
     @PluginProperty
     @Builder.Default
     private String timezone = ZoneId.systemDefault().toString();
@@ -213,15 +209,6 @@ public class Schedule extends AbstractTrigger implements Schedulable, TriggerOut
     @Null
     private final Duration interval = null;
 
-    @Valid
-    @Schema(
-        title = "(Deprecated) Conditions on date. Use `conditions` instead.",
-        description = "List of schedule conditions in order to limit the schedule trigger date."
-    )
-    @PluginProperty
-    @Deprecated
-    private List<ScheduleCondition> scheduleConditions;
-    
     private Map<String, Object> inputs;
 
     @Schema(
@@ -234,22 +221,7 @@ public class Schedule extends AbstractTrigger implements Schedulable, TriggerOut
     @Getter(AccessLevel.NONE)
     private transient ExecutionTime executionTime;
 
-    @Schema(
-        title = "(Deprecated) Backfill",
-        description = "This property is deprecated and will be removed in the future. Instead, you can now go to the Triggers tab and start a highly customizable backfill process directly from the UI. This will allow you to backfill missed scheduled executions by providing a specific date range and custom labels. Read more about it in the [Backfill](https://kestra.io/docs/concepts/backfill) documentation."
-    )
-    @PluginProperty
-    @Deprecated
-    private Map<String, Object> backfill;
-    
     private RecoverMissedSchedules recoverMissedSchedules;
-
-    @Override
-    public List<Condition> getConditions() {
-        List<Condition> conditions = Stream.concat(ListUtils.emptyOnNull(this.conditions).stream(),
-            ListUtils.emptyOnNull(this.scheduleConditions).stream().map(c -> (Condition) c)).toList();
-        return conditions.isEmpty() ? null : conditions;
-    }
 
     @Override
     public ZonedDateTime nextEvaluationDate(ConditionContext conditionContext, Optional<? extends TriggerContext> last) {
@@ -290,12 +262,12 @@ public class Schedule extends AbstractTrigger implements Schedulable, TriggerOut
             // is after the end, then we calculate again the nextDate
             // based on now()
             if (backfill != null && nextDate != null && nextDate.isAfter(backfill.getEnd())) {
-                nextDate = computeNextEvaluationDate(executionTime, convertDateTime(ZonedDateTime.now())).orElse(null);
+                nextDate = computeNextEvaluationDate(executionTime, convertDateTime(SchedulerClock.now())).orElse(null);
             }
         }
         // no previous present & no backfill or recover missed schedules, just provide now
         else {
-            nextDate = computeNextEvaluationDate(executionTime, convertDateTime(ZonedDateTime.now())).orElse(null);
+            nextDate = computeNextEvaluationDate(executionTime, convertDateTime(SchedulerClock.now())).orElse(null);
         }
 
         // if max delay reached, we calculate a new date except if we are doing a backfill
@@ -316,7 +288,7 @@ public class Schedule extends AbstractTrigger implements Schedulable, TriggerOut
     public ZonedDateTime nextEvaluationDate() {
         // it didn't take into account the schedule condition, but as they are taken into account inside eval() it's OK.
         ExecutionTime executionTime = this.executionTime();
-        return computeNextEvaluationDate(executionTime, convertDateTime(ZonedDateTime.now())).orElse(convertDateTime(ZonedDateTime.now()));
+        return computeNextEvaluationDate(executionTime, convertDateTime(SchedulerClock.now())).orElse(convertDateTime(SchedulerClock.now()));
     }
 
     @Override
@@ -327,7 +299,7 @@ public class Schedule extends AbstractTrigger implements Schedulable, TriggerOut
                 Optional<ZonedDateTime> previous = this.truePreviousNextDateWithCondition(
                     executionTime,
                     conditionContext,
-                    ZonedDateTime.now(),
+                    SchedulerClock.now(),
                     false
                 );
 
@@ -338,7 +310,7 @@ public class Schedule extends AbstractTrigger implements Schedulable, TriggerOut
                 conditionContext.getRunContext().logger().warn("Unable to evaluate the conditions for the next evaluation date for trigger '{}', conditions will not be evaluated", this.getId());
             }
         }
-        return computePreviousEvaluationDate(executionTime, convertDateTime(ZonedDateTime.now())).orElse(convertDateTime(ZonedDateTime.now()));
+        return computePreviousEvaluationDate(executionTime, convertDateTime(SchedulerClock.now())).orElse(convertDateTime(SchedulerClock.now()));
     }
 
     @Override
@@ -373,7 +345,7 @@ public class Schedule extends AbstractTrigger implements Schedulable, TriggerOut
 
         // we are in the future don't allow
         // No use case, just here for prevention but it should never happen
-        if (next.compareTo(ZonedDateTime.now().plus(Duration.ofSeconds(1))) > 0) {
+        if (next.compareTo(SchedulerClock.now().plus(Duration.ofSeconds(1))) > 0) {
             if (log.isTraceEnabled()) {
                 log.trace("Schedule is in the future, execution skipped, this behavior should never happen.");
             }
@@ -489,8 +461,8 @@ public class Schedule extends AbstractTrigger implements Schedulable, TriggerOut
 
     @VisibleForTesting
     Optional<ZonedDateTime> truePreviousNextDateWithCondition(ExecutionTime executionTime, ConditionContext conditionContext, ZonedDateTime toTestDate, boolean next) throws InternalException {
-        int upperYearBound = ZonedDateTime.now().getYear() + 10;
-        int lowerYearBound = ZonedDateTime.now().getYear() - 10;
+        int upperYearBound = SchedulerClock.now().getYear() + 10;
+        int lowerYearBound = SchedulerClock.now().getYear() - 10;
 
         while ((next && toTestDate.getYear() < upperYearBound) || (!next && toTestDate.getYear() > lowerYearBound)) {
 
@@ -542,10 +514,10 @@ public class Schedule extends AbstractTrigger implements Schedulable, TriggerOut
         }
 
         while (
-            (output.getDate().getYear() < ZonedDateTime.now().getYear() + 10) &&
-                (output.getDate().getYear() > ZonedDateTime.now().getYear() - 10)
+            (output.getDate().getYear() < SchedulerClock.now().getYear() + 10) &&
+                (output.getDate().getYear() > SchedulerClock.now().getYear() - 10)
         ) {
-            if (output.getDate().plus(this.lateMaximumDelay).compareTo(ZonedDateTime.now()) < 0) {
+            if (output.getDate().plus(this.lateMaximumDelay).compareTo(SchedulerClock.now()) < 0) {
                 output = this.scheduleDates(executionTime, output.getNext()).orElse(null);
                 if (output == null) {
                     return null;

@@ -12,7 +12,6 @@ import io.kestra.core.models.flows.input.StringInput;
 import io.kestra.core.models.flows.input.URIInput;
 import io.kestra.core.models.tasks.common.EncryptedString;
 import io.kestra.core.models.property.Property;
-import io.kestra.core.repositories.KvMetadataRepositoryInterface;
 import io.kestra.core.secret.SecretNotFoundException;
 import io.kestra.core.secret.SecretService;
 import io.kestra.core.services.KVStoreService;
@@ -71,7 +70,7 @@ class FlowInputOutputTest {
     StorageInterface storageInterface;
 
     @Inject
-    KvMetadataRepositoryInterface kvMetadataRepository;
+    KVMetadataStateStore kvMetadataStateStore;
 
     @Value("${kestra.encryption.secret-key}")
     String secretKey;
@@ -91,7 +90,7 @@ class FlowInputOutputTest {
         return new KVStoreService() {
             @Override
             public KVStore get(String tenant, String namespace, @Nullable String fromNamespace) {
-                return new InternalKVStore(tenant, namespace, storageInterface, kvMetadataRepository) {
+                return new InternalKVStore(tenant, namespace, storageInterface, kvMetadataStateStore) {
                     @Override
                     public Optional<KVValue> getValue(String key) {
                         return Optional.of(new KVValue(TEST_KV_VALUE));

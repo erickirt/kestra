@@ -7,7 +7,6 @@ import io.kestra.core.metrics.MetricRegistry;
 import io.kestra.core.models.executions.metrics.Counter;
 import io.kestra.core.models.executions.metrics.Gauge;
 import io.kestra.core.models.executions.metrics.Timer;
-import io.micronaut.core.annotation.Introspected;
 import jakarta.annotation.Nullable;
 import lombok.EqualsAndHashCode;
 import lombok.Getter;
@@ -32,7 +31,6 @@ import jakarta.validation.constraints.NotNull;
 @EqualsAndHashCode(exclude="timestamp")
 @Getter
 @NoArgsConstructor
-@Introspected
 abstract public class AbstractMetricEntry<T> {
     abstract public String getType();
 

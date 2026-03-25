@@ -1,12 +1,12 @@
 package io.kestra.core.repositories;
 
+import com.google.common.annotations.VisibleForTesting;
 import io.kestra.core.models.QueryFilter;
 import io.kestra.core.models.executions.Execution;
 import io.kestra.core.models.executions.statistics.DailyExecutionStatistics;
-import io.kestra.core.models.executions.statistics.ExecutionCount;
-import io.kestra.core.models.executions.statistics.Flow;
 import io.kestra.core.models.flows.FlowScope;
 import io.kestra.core.models.flows.State;
+import io.kestra.core.models.triggers.TriggerId;
 import io.kestra.core.utils.DateUtils;
 import io.kestra.plugin.core.dashboard.data.Executions;
 import io.micronaut.data.model.Pageable;
@@ -23,7 +23,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.function.Function;
 
-public interface ExecutionRepositoryInterface extends SaveRepositoryInterface<Execution>, QueryBuilderInterface<Executions.Fields> {
+public interface ExecutionRepositoryInterface extends QueryBuilderInterface<Executions.Fields> {
     default Optional<Execution> findById(String tenantId, String id) {
         return findById(tenantId, id, false);
     }
@@ -35,13 +35,21 @@ public interface ExecutionRepositoryInterface extends SaveRepositoryInterface<Ex
     ArrayListTotal<Execution> findByFlowId(String tenantId, String namespace, String id, Pageable pageable);
 
     /**
-     * Finds all the executions that was triggered by the given execution id.
+     * Finds all the executions that were triggered by the given execution id.
      *
      * @param tenantId           the tenant id.
      * @param triggerExecutionId the id of the execution trigger.
      * @return a {@link Flux} of one or more executions.
      */
     Flux<Execution> findAllByTriggerExecutionId(String tenantId, String triggerExecutionId);
+
+    /**
+     * Finds all the executions that was triggered by the given trigger.
+     *
+     * @param triggerId          the trigger id.
+     * @return a {@link Flux} of one or more executions.
+     */
+    Flux<Execution> findAllByTrigger(TriggerId triggerId);
 
     /**
      * Finds the latest execution for the given flow and s.
@@ -95,6 +103,10 @@ public interface ExecutionRepositoryInterface extends SaveRepositoryInterface<Ex
 
     Flux<Execution> findAsync(String tenantId, List<QueryFilter> filters);
 
+    /**
+     * WARNING: this method is only intended to be used in tests.
+     */
+    @VisibleForTesting
     Execution delete(Execution execution);
 
     Integer purge(Execution execution);
@@ -132,17 +144,10 @@ public interface ExecutionRepositoryInterface extends SaveRepositoryInterface<Ex
         private String id;
     }
 
-    List<ExecutionCount> executionCounts(
-        @Nullable String tenantId,
-        @Nullable List<Flow> flows,
-        @Nullable List<State.Type> states,
-        @Nullable ZonedDateTime startDate,
-        @Nullable ZonedDateTime endDate,
-        @Nullable List<String> namespaces);
-
+    /**
+     * WARNING: this method is only intended to be used in tests or inside the BackupService.
+     */
     Execution save(Execution execution);
-
-    Execution update(Execution execution);
 
     default Function<String, String> sortMapping() throws IllegalArgumentException {
         return s -> s;

@@ -6,7 +6,6 @@ import com.google.common.base.CaseFormat;
 import com.google.common.collect.ImmutableMap;
 import io.kestra.core.exceptions.IllegalVariableEvaluationException;
 import io.kestra.core.metrics.MetricRegistry;
-import io.kestra.core.models.assets.AssetsDeclaration;
 import io.kestra.core.models.Plugin;
 import io.kestra.core.models.executions.AbstractMetricEntry;
 import io.kestra.core.models.property.Property;
@@ -19,9 +18,9 @@ import io.kestra.core.storages.Storage;
 import io.kestra.core.storages.StorageInterface;
 import io.kestra.core.storages.kv.KVStore;
 import io.kestra.core.utils.ListUtils;
+import io.kestra.core.utils.MapUtils;
 import io.kestra.core.utils.VersionProvider;
 import io.micronaut.context.ApplicationContext;
-import io.micronaut.core.annotation.Introspected;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.ConstraintViolationException;
 import jakarta.validation.Validator;
@@ -48,7 +47,6 @@ import static io.kestra.core.utils.Rethrow.throwFunction;
 /**
  * Default and mutable implementation of {@link RunContext}.
  */
-@Introspected
 public class DefaultRunContext extends RunContext {
     // Injected manually inside init(ApplicationContext)
     private ApplicationContext applicationContext;
@@ -129,16 +127,6 @@ public class DefaultRunContext extends RunContext {
     @Override
     public void setTraceParent(String traceParent) {
         this.traceParent = traceParent;
-    }
-
-    /**
-     * @deprecated Plugin should not use the ApplicationContext anymore, and neither should they cast to this implementation.
-     *             Plugin should instead rely on supported API only.
-     */
-    @JsonIgnore
-    @Deprecated(since = "1.2.0", forRemoval = true)
-    public ApplicationContext getApplicationContext() {
-        return applicationContext;
     }
 
     @JsonIgnore
@@ -238,7 +226,7 @@ public class DefaultRunContext extends RunContext {
         runContext.storage = this.storage;
         runContext.pluginConfiguration = this.pluginConfiguration;
         runContext.secretInputs = this.secretInputs;
-        if (this.isInitialized()) {
+        if (isInitialized.get()) {
             //Inject all services
             runContext.init(applicationContext);
         }
@@ -410,13 +398,6 @@ public class DefaultRunContext extends RunContext {
         return null;
     }
 
-    // for serialization backward-compatibility
-    @Override
-    @JsonIgnore
-    public URI getStorageOutputPrefix() {
-        return storage.getContextBaseURI();
-    }
-
     /**
      * {@inheritDoc}
      */
@@ -539,26 +520,18 @@ public class DefaultRunContext extends RunContext {
      */
     @Override
     @SuppressWarnings("unchecked")
-    public String tenantId() {
-        Map<String, String> flow = (Map<String, String>) this.getVariables().get("flow");
-        // normally only tests should not have the flow variable
-        return flow != null ? flow.get("tenantId") : null;
-    }
-
-    /**
-     * {@inheritDoc}
-     */
-    @Override
     public TaskRunInfo taskRunInfo() {
         Optional<Map<String, Object>> maybeTaskRunMap = Optional.ofNullable(this.getVariables().get("taskrun"))
             .map(Map.class::cast);
+        Optional<Map<String, Object>> maybeTaskMap = Optional.ofNullable(this.getVariables().get("task"))
+            .map(Map.class::cast);
+        Optional<Map<String, Object>> maybeExecutionMap = Optional.ofNullable(this.getVariables().get("execution"))
+            .map(Map.class::cast);
         return new TaskRunInfo(
-            (String) this.getVariables().get("executionId"),
-            (String) this.getVariables().get("taskId"),
-            maybeTaskRunMap.map(m -> (String) m.get("id"))
-                .orElse(null),
-            maybeTaskRunMap.map(m -> (String) m.get("value"))
-                .orElse(null)
+            maybeExecutionMap.map(m -> (String) m.get("id")).orElse(null),
+            maybeTaskMap.map(m -> (String) m.get("id")).orElse(null),
+            maybeTaskRunMap.map(m -> (String) m.get("id")).orElse(null),
+            maybeTaskRunMap.map(m -> (String) m.get("value")).orElse(null)
         );
     }
 
@@ -596,17 +569,12 @@ public class DefaultRunContext extends RunContext {
      */
     @Override
     public String version() {
-        return this.isInitialized() ? version.getVersion() : null;
+        return isInitialized.get() ? version.getVersion() : null;
     }
 
     @Override
     public KVStore namespaceKv(String namespace) {
         return kvStoreService.get(this.flowInfo().tenantId(), namespace, this.flowInfo().namespace());
-    }
-
-    @Override
-    public boolean isInitialized() {
-        return isInitialized.get();
     }
 
     @Override
@@ -645,6 +613,34 @@ public class DefaultRunContext extends RunContext {
     @Override
     public SDK sdk() {
         return this.sdk;
+    }
+
+    @SuppressWarnings("unchecked")
+    @Override
+    public Map<String, Object> currentOutput() {
+        Map<?, ?> allOutputs = (Map<?, ?>) variables.get("outputs");
+        Map<?, ?> outputs = (Map<?, ?>) MapUtils.emptyOnNull(allOutputs).get(taskRunInfo().taskId());
+        List<Map<?, ?>> parents = (List<Map<?, ?>>) variables.get("parents");
+        if (!ListUtils.isEmpty(parents) && !MapUtils.isEmpty(outputs)) {
+            Collections.reverse(parents);
+            for (Map<?, ?> parent : parents) {
+                Map<?, ?> taskrun = (Map<?, ?>) parent.get("taskrun");
+                if (taskrun != null) {
+                    outputs = (Map<?, ?>) outputs.get(taskrun.get("value"));
+                }
+            }
+        }
+        Map<?, ?> taskrun = (Map<?, ?>) variables.get("taskrun");
+
+        return taskrun.get("value") == null ?  (Map<String, Object>) outputs : (Map<String, Object>) outputs.get(taskrun.get("value"));
+    }
+
+    /**
+     * Get access to Kestra internal services.
+     * WARNING: this should only be used for very specific needs, plugins should try to avoid using an Kestra internal service.
+     */
+    public Services services() {
+        return new Services(this.applicationContext);
     }
 
     /**
