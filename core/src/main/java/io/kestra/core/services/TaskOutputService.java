@@ -139,11 +139,11 @@ public class TaskOutputService {
         // load all outputs
         List<TaskOutput> allTaskOutputs = outputRepository.findByExecution(execution);
 
-        Map<String, Object> result = new HashMap<>();
+        Map<String, Object> result = new LinkedHashMap<>();
         execution.getTaskRunList().stream()
             .collect(Collectors.groupingBy(taskRun -> taskRun.getTaskId()))
             .forEach((taskId, taskRuns) -> {
-                Map<String, Object> taskOutputs = new HashMap<>();
+                Map<String, Object> taskOutputs = new LinkedHashMap<>();
                 for (TaskRun current : taskRuns) {
                     var outputs = allTaskOutputs.stream().filter(it -> it.taskRunId().equals(current.getId())).findAny();
                     if (outputs.isPresent()) {
@@ -211,11 +211,11 @@ public class TaskOutputService {
             }
         }
 
-        Map<String, Object> result = HashMap.newHashMap(1);
+        Map<String, Object> result = LinkedHashMap.newLinkedHashMap(1);
         Map<String, Object> current = result;
 
         for (TaskRun t : parents) {
-            HashMap<String, Object> item = HashMap.newHashMap(1);
+            HashMap<String, Object> item = LinkedHashMap.newLinkedHashMap(1);
             current.put(t.getValue(), item);
             current = item;
         }

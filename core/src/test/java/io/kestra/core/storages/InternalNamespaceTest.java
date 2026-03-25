@@ -60,9 +60,9 @@ class InternalNamespaceTest {
 
         // Then
         assertThat(namespaceFiles).containsExactlyInAnyOrder(
-            NamespaceFile.of(namespaceId, "/", 1), 
+            NamespaceFile.of(namespaceId, "/", 1),
             NamespaceFile.of(namespaceId, "sub/", 1),
-            NamespaceFile.of(namespaceId, "sub/dir/", 1), 
+            NamespaceFile.of(namespaceId, "sub/dir/", 1),
             NamespaceFile.of(namespaceId, "sub/dir/file.txt", 1)
         );
 
@@ -183,12 +183,12 @@ class InternalNamespaceTest {
         List<NamespaceFile> namespaceFiles = namespace.findAllFilesMatching((unused) -> true);
         assertThat(namespaceFiles.size()).isZero();
     }
-    
+
     @Test
     void shouldMoveFolderWithFilesIntoAnotherFolder() throws Exception {
         // Given: folder1 with 2 files, folder2 with 2 files
         final String namespaceId = TestsUtils.randomNamespace();
-        final InternalNamespace namespace = new InternalNamespace(log, MAIN_TENANT, namespaceId, storageInterface, namespaceFileMetadataRepository);
+        final InternalNamespace namespace = new InternalNamespace(log, MAIN_TENANT, namespaceId, storageInterface, namespaceFileMetadataStateStore);
 
         namespace.putFile(Path.of("/folder1/file1.txt"), new ByteArrayInputStream("content1".getBytes()));
         namespace.putFile(Path.of("/folder1/file2.txt"), new ByteArrayInputStream("content2".getBytes()));
@@ -234,7 +234,7 @@ class InternalNamespaceTest {
     void shouldRollbackMoveWhenCopyFails() throws Exception {
         // Given: folder1 with 2 files, folder2 with 2 files
         final String namespaceId = TestsUtils.randomNamespace();
-        final InternalNamespace namespace = new InternalNamespace(log, MAIN_TENANT, namespaceId, storageInterface, namespaceFileMetadataRepository);
+        final InternalNamespace namespace = new InternalNamespace(log, MAIN_TENANT, namespaceId, storageInterface, namespaceFileMetadataStateStore);
 
         namespace.putFile(Path.of("/folder1/file1.txt"), new ByteArrayInputStream("content1".getBytes()));
         namespace.putFile(Path.of("/folder1/file2.txt"), new ByteArrayInputStream("content2".getBytes()));

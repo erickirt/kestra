@@ -275,7 +275,8 @@ class ExecutionServiceTest {
                 .toList()
         );
 
-        Execution restart = executionService.replay(executionWithRunningSibling, replayTarget.getId(), null);
+        Flow flow = flowRepository.findByExecution(execution);
+        Execution restart = executionService.replay(executionWithRunningSibling, flow, replayTarget.getId(), null, Optional.empty());
 
         TaskRun restartedSibling = restart.findTaskRunByTaskIdAndValue("1-3-3_end", List.of());
         assertThat(restartedSibling.getState().getCurrent()).isEqualTo(State.Type.RESTARTED);
@@ -516,7 +517,8 @@ class ExecutionServiceTest {
         String sequentialTaskRunId = execution.findTaskRunByTaskIdAndValue("sequential", List.of()).getId();
 
         // When: replay from the parent Sequential task
-        Execution replay = executionService.replay(execution, sequentialTaskRunId, null);
+        Flow flow = flowRepository.findByExecution(execution);
+        Execution replay = executionService.replay(execution, flow, sequentialTaskRunId, null, Optional.empty());
 
         // Then: the stale error-handler task run must be removed
         assertThat(replay.getState().getCurrent()).isEqualTo(State.Type.RESTARTED);

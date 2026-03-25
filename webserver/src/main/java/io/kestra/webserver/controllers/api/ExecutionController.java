@@ -1486,7 +1486,7 @@ public class ExecutionController {
     }
 
     protected Mono<HttpResponse<?>> resumeFoundExecution(MultipartBody inputs, Execution execution, Flow flow) {
-        Pause.Resumed resumed = createResumed();
+        io.kestra.plugin.core.flow.Pause.Resumed resumed = createResumed();
 
         return this.executionService.readInputs(execution, flow, inputs)
             .handle((resumeInputs, sink) -> {

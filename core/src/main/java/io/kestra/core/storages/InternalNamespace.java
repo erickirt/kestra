@@ -1,5 +1,7 @@
 package io.kestra.core.storages;
 
+import io.kestra.core.models.FetchVersion;
+import io.kestra.core.models.QueryFilter;
 import io.kestra.core.models.namespaces.files.NamespaceFileMetadata;
 import io.kestra.core.namespace.NamespaceFileMetadataStateStore;
 import jakarta.annotation.Nullable;
@@ -138,19 +140,13 @@ public class InternalNamespace implements Namespace {
         }
 
         // Get all metadata for source and its descendants, all versions
-        ArrayListTotal<NamespaceFileMetadata> sourceMetas = namespaceFileMetadataRepository.find(Pageable.UNPAGED, tenant, List.of(
-            QueryFilter.builder().field(QueryFilter.Field.NAMESPACE).operation(QueryFilter.Op.EQUALS).value(namespace).build(),
-            QueryFilter.builder().field(QueryFilter.Field.PATH).operation(QueryFilter.Op.IN).value(List.of(normalizedSource.toString(), normalizedSource + "/")).build()
-        ), true, FetchVersion.ALL);
+        List<NamespaceFileMetadata> sourceMetas = stateStore.findAllVersionsByPaths(tenant, namespace, List.of(normalizedSource.toString(), normalizedSource + "/"));
 
         List<NamespaceFileMetadata> allMetas = new ArrayList<>(sourceMetas);
         boolean isDirectory = sourceMetas.stream().anyMatch(NamespaceFileMetadata::isDirectory);
         if (isDirectory) {
             String parentPathPrefix = normalizedSource.toString().endsWith("/") ? normalizedSource.toString() : normalizedSource + "/";
-            ArrayListTotal<NamespaceFileMetadata> descendants = namespaceFileMetadataRepository.find(Pageable.UNPAGED, tenant, List.of(
-                QueryFilter.builder().field(QueryFilter.Field.NAMESPACE).operation(QueryFilter.Op.EQUALS).value(namespace).build(),
-                QueryFilter.builder().field(QueryFilter.Field.PARENT_PATH).operation(QueryFilter.Op.STARTS_WITH).value(parentPathPrefix).build()
-            ), true, FetchVersion.ALL);
+            List<NamespaceFileMetadata> descendants = stateStore.findChildren(tenant, namespace, parentPathPrefix, true);
             allMetas.addAll(descendants);
         }
 
@@ -210,6 +206,13 @@ public class InternalNamespace implements Namespace {
             .forEach(throwConsumer(pair -> this.purge(pair.getLeft())));
 
         return results;
+    }
+
+    private void purge(NamespaceFile nsFile) throws IOException {
+        // Hard-delete the old entry via storage
+        storage.delete(tenant, namespace, nsFile.storagePath().toUri());
+        // Purge the old metadata entry
+        stateStore.save(NamespaceFileMetadata.of(tenant, nsFile).toBuilder().deleted(true).build());
     }
 
     /**

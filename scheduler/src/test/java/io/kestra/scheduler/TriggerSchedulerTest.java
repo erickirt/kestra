@@ -277,7 +277,7 @@ class TriggerSchedulerTest {
             .conditions(List.of(
                 DayWeekInMonth.builder()
                     .type(DayWeekInMonth.class.getName())
-                    .date("{{ trigger.date }}")
+                    .date(Property.ofExpression("{{ trigger.date }}"))
                     .dayOfWeek(Property.ofValue(DayOfWeek.MONDAY))
                     .dayInMonth(Property.ofValue(DayWeekInMonth.DayInMonth.FIRST))
                     .build()
@@ -335,7 +335,7 @@ class TriggerSchedulerTest {
             TriggerState currentTriggerState = triggerStateStore.findById(Fixtures.triggerId()).orElse(null);
             assertThat(currentTriggerState).isNotNull();
 
-            // [1-4 Calls] onSchedule 
+            // [1-4 Calls] onSchedule
             if (i < 4) {
                 assertThat(currentTriggerState.isLocked()).isTrue();
                 assertThat(currentTriggerState.getUpdatedAt()).isEqualTo(SchedulerClock.now().toInstant());
@@ -355,7 +355,7 @@ class TriggerSchedulerTest {
 
                 triggerExecutionPublisher.clear();
             }
-            // [5 Call] onSchedule 
+            // [5 Call] onSchedule
             else {
                 assertThat(currentTriggerState.isLocked()).isFalse();
 
@@ -395,7 +395,7 @@ class TriggerSchedulerTest {
             TriggerState currentTriggerState = triggerStateStore.findById(Fixtures.triggerId()).orElse(null);
             assertThat(currentTriggerState).isNotNull();
 
-            // [1st Call] onSchedule 
+            // [1st Call] onSchedule
             if (i == 0) {
                 assertThat(currentTriggerState.isLocked()).isTrue();
                 assertThat(currentTriggerState.getEvaluatedAt()).isEqualTo(expectedNextEvaluationNDate.minusMinutes(15).toInstant());
@@ -416,7 +416,7 @@ class TriggerSchedulerTest {
 
                 triggerExecutionPublisher.executions().clear();
             }
-            // [2nd Call] onSchedule 
+            // [2nd Call] onSchedule
             else {
                 assertThat(currentTriggerState.getNextEvaluationDate()).isEqualTo(expectedNextEvaluationNDate.toInstant());
                 assertThat(currentTriggerState.isLocked()).isFalse();
@@ -550,11 +550,11 @@ class TriggerSchedulerTest {
 
             triggerExecutionPublisher.executions().clear();
 
-            // [1-4 Calls] onSchedule 
+            // [1-4 Calls] onSchedule
             if (i < 4) {
                 assertThat(currentTriggerState.getBackfill()).isNotNull();
             }
-            // [5 Call] onSchedule 
+            // [5 Call] onSchedule
             else {
                 assertThat(currentTriggerState.getBackfill()).isNull();
             }
