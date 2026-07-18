@@ -1192,6 +1192,12 @@
         "title": "Agregar Blueprints Personalizados",
         "message": "En Kestra Enterprise Edition, puedes crear Blueprints personalizados disponibles solo para tu organización. Puedes usarlos como plantillas de mejores prácticas para compartir, centralizar y documentar flujos de trabajo comúnmente utilizados en tu equipo."
       },
+      "policies": {
+        "header": "Governance Policies",
+        "label": "Policies",
+        "message": "Policies let platform teams centrally manage and enforce rules across all flows — inject shared defaults, block plugins, bound property values, and require compliance labels. Rules apply at the tenant or namespace level with staged rollout, and every injected or replaced value stays visible to flow authors.",
+        "title": "Govern Every Flow with Policies"
+      },
       "namespace": {
         "edit": {
           "title": "Mejora la Gestión de tu Namespace",
@@ -1208,6 +1214,10 @@
         "variables": {
           "title": "Gobierne Centralmente Sus Variables",
           "message": "En Kestra Enterprise Edition, puedes definir y gestionar variables a nivel de namespace para eliminar configuraciones repetitivas a través de los flows. Estas variables aseguran consistencia, simplifican las actualizaciones de configuración y pueden ser fácilmente referenciadas por cualquier task o trigger para flujos de trabajo más limpios y mantenibles."
+        },
+        "policies": {
+          "title": "Enforce Governance Rules Across This Namespace",
+          "message": "In Kestra Enterprise Edition, Policies let you define rules that apply to every flow in this namespace and its children — inject shared defaults, restrict property values, block plugins, and require compliance labels, with every change fully visible to flow authors."
         },
         "history": {
           "title": "Gestionar el Historial de Revisiones en un Solo Lugar",

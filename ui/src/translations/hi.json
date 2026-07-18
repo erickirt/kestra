@@ -1192,6 +1192,12 @@
         "title": "कस्टम Blueprints जोड़ें",
         "message": "Kestra एंटरप्राइज एडिशन में, आप अपनी संस्था के लिए केवल उपलब्ध कस्टम Blueprints बना सकते हैं। आप इन्हें अपनी टीम में साझा करने, केंद्रीकृत करने और सामान्य रूप से उपयोग किए जाने वाले workflows को दस्तावेज़ करने के लिए सर्वोत्तम-प्रथाओं के टेम्पलेट के रूप में उपयोग कर सकते हैं।"
       },
+      "policies": {
+        "header": "Governance Policies",
+        "label": "Policies",
+        "message": "Policies let platform teams centrally manage and enforce rules across all flows — inject shared defaults, block plugins, bound property values, and require compliance labels. Rules apply at the tenant or namespace level with staged rollout, and every injected or replaced value stays visible to flow authors.",
+        "title": "Govern Every Flow with Policies"
+      },
       "namespace": {
         "edit": {
           "title": "अपने Namespace प्रबंधन को अपग्रेड करें",
@@ -1208,6 +1214,10 @@
         "variables": {
           "title": "अपने वेरिएबल्स को केंद्रीय रूप से प्रबंधित करें",
           "message": "Kestra Enterprise Edition में, आप namespace-स्तर के वेरिएबल्स को परिभाषित और प्रबंधित कर सकते हैं ताकि flows में दोहराव वाली कॉन्फ़िगरेशन को समाप्त किया जा सके। ये वेरिएबल्स स्थिरता सुनिश्चित करते हैं, कॉन्फ़िगरेशन अपडेट को सरल बनाते हैं, और किसी भी task या trigger द्वारा आसानी से संदर्भित किए जा सकते हैं, जिससे workflows को अधिक साफ और बनाए रखने योग्य बनाया जा सके।"
+        },
+        "policies": {
+          "title": "Enforce Governance Rules Across This Namespace",
+          "message": "In Kestra Enterprise Edition, Policies let you define rules that apply to every flow in this namespace and its children — inject shared defaults, restrict property values, block plugins, and require compliance labels, with every change fully visible to flow authors."
         },
         "history": {
           "title": "एक ही स्थान पर Revision History प्रबंधित करें",
